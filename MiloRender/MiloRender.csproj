@@ -97,6 +97,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="DataTypes\Face.cs" />
+    <Compile Include="DataTypes\Mesh.cs" />
     <Compile Include="DataTypes\Vertex.cs" />
     <Compile Include="DataTypes\VertexBuffer.cs" />
     <Compile Include="Render.cs" />

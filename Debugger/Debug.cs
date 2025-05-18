@@ -1,31 +1,20 @@
-﻿using System;
+﻿// In Debugger.Debug.cs
+using System;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.Diagnostics; // For [Conditional] and System.Diagnostics.Debug
 using System.IO;
 using System.Runtime.InteropServices;
 
 namespace Debugger
 {
-    /// <summary>
-    /// a class for displaying debug information during development
-    /// onlu to be used/functional during a debug build
-    /// </summary>
     public static class Debug
     {
-        /// <summary>
-        /// a list containing all the messages
-        /// </summary>
         public static List<string> messages = new List<string>();
-        /// <summary>
-        /// wether or not the list has been initialized
-        /// </summary>
-        public static bool initialized = false;
-        /// <summary>
-        /// the filename to save the file under
-        /// </summary>
+        public static bool initialized { get; private set; } = false; // Readonly public, private set
+        private static bool consoleWasAllocatedByThisClass = false; // Track if we called AllocConsole
+
         public const string LogFileName = "EngineLog.txt";
 
-        //for opening the console
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool AllocConsole();
@@ -36,80 +25,97 @@ namespace Debugger
         [DllImport("user32.dll")]
         static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool FreeConsole();
+
         const int SW_SHOW = 5;
 
-        /// <summary>
-        /// open the console to display it along side the main
-        /// window
-        /// </summary>
-        [Conditional("DEBUG")] // This attribute ensures this method (and calls to it) are only compiled in DEBUG builds
+        [Conditional("DEBUG")]
         public static void OpenConsole()
         {
-            if (!initialized)
+            if (initialized) return;
+
+            // This method body will only exist in DEBUG builds of the Debugger assembly.
+            // Calls to it from MiloNet will only exist if MiloNet is also in DEBUG.
+            System.Diagnostics.Debug.WriteLine("Debug.OpenConsole() entered."); // Use System.Diagnostics.Debug for early diagnostics
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                try
+                IntPtr currentConsole = GetConsoleWindow();
+                if (currentConsole != IntPtr.Zero)
                 {
-                    // Try to allocate a console window (Windows specific)
-                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    System.Diagnostics.Debug.WriteLine("Milo Engine: Console already exists. Attaching to it.");
+                    // Optionally, ensure it's visible if it might be hidden
+                    // ShowWindow(currentConsole, SW_SHOW); 
+                    Console.WriteLine("Milo Engine Debug Console (attached to existing).");
+                    initialized = true;
+                    consoleWasAllocatedByThisClass = false;
+                }
+                else
+                {
+                    if (AllocConsole())
                     {
-                        if (AllocConsole())
+                        System.Diagnostics.Debug.WriteLine("Milo Engine: AllocConsole() successful.");
+                        IntPtr newConsoleHandle = GetConsoleWindow();
+                        if (newConsoleHandle != IntPtr.Zero)
                         {
-                            IntPtr consoleHandle = GetConsoleWindow();
-                            if (consoleHandle != IntPtr.Zero)
-                            {
-                                ShowWindow(consoleHandle, SW_SHOW);
-                                Console.WriteLine("Milo Engine Debug Console Initialized.");
-                                initialized = true;
-                            }
-                            else
-                            {
-                                // Fallback or log that console couldn't be obtained
-                                System.Diagnostics.Debug.WriteLine("Milo Engine: Could not get console window handle.");
-                                // We can still use System.Diagnostics.Debug.WriteLine as a fallback if a separate console isn't critical
-                                // or consider an in-game console.
-                                initialized = false; // Or set to true and just use System.Diagnostics.Debug
-                            }
+                            ShowWindow(newConsoleHandle, SW_SHOW);
+                            Console.WriteLine("Milo Engine Debug Console Initialized (newly allocated).");
+                            initialized = true;
+                            consoleWasAllocatedByThisClass = true;
                         }
                         else
                         {
-                            // If AllocConsole fails (e.g., already has a console), we can try to use the existing one.
-                            // For simplicity here, we'll just log to the standard debug output.
-                            System.Diagnostics.Debug.WriteLine($"Milo Engine: Failed to allocate console. Error Code: {Marshal.GetLastWin32Error()}");
-                            // Attempt to use existing console if possible, or just mark as "initialized" for logging to System.Diagnostics.Debug
-                            // This might happen if running from a command prompt already.
-                            // For now, we'll assume if AllocConsole fails, we might already have one or will fallback.
-                            // A more robust solution might check GetConsoleWindow() first.
-                            Console.WriteLine("Milo Engine Debug Console (using existing or fallback)."); // Try writing to see if it appears
-                            initialized = true;
+                            System.Diagnostics.Debug.WriteLine("Milo Engine: AllocConsole succeeded but GetConsoleWindow returned IntPtr.Zero.");
+                            initialized = false; // Failed to get handle
                         }
                     }
                     else
                     {
-                        // For non-Windows platforms, we'll just use System.Diagnostics.Debug.WriteLine
-                        // or you could integrate a simple in-game console UI later.
-                        System.Diagnostics.Debug.WriteLine("Milo Engine: Console allocation is Windows-specific. Using System.Diagnostics.Debug for logging.");
-                        initialized = true; // Mark as initialized to allow logging via System.Diagnostics.Debug
+                        int errorCode = Marshal.GetLastWin32Error();
+                        System.Diagnostics.Debug.WriteLine($"Milo Engine: Failed to allocate console. Win32 Error Code: {errorCode}");
+                        // If it failed, maybe it's because it's a console app but GetConsoleWindow initially returned Zero for some reason.
+                        // Try writing to Console anyway to see if it appears in an existing one.
+                        try
+                        {
+                            Console.WriteLine("Milo Engine Debug Console (attempting to use existing/fallback after AllocConsole failure).");
+                            initialized = true; // Assume we can use the implicit console for logging
+                            consoleWasAllocatedByThisClass = false;
+                        }
+                        catch (IOException)
+                        {
+                            System.Diagnostics.Debug.WriteLine("Milo Engine: Cannot write to Console after AllocConsole failure.");
+                            initialized = false;
+                        }
                     }
                 }
-                catch (Exception ex)
-                {
-                    System.Diagnostics.Debug.WriteLine($"Milo Engine: Error opening console: {ex.Message}");
-                    initialized = false; // Ensure it's false if something went wrong
-                }
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("Milo Engine: Console management is Windows-specific. Using System.Diagnostics.Debug for logging.");
+                initialized = true; // Allow logging to System.Diagnostics.Debug
+                consoleWasAllocatedByThisClass = false;
+            }
 
-                if (initialized)
-                {
-                    Log("Debug console started.");
-                }
+            if (initialized)
+            {
+                Log("Debug system started."); // This now correctly uses the initialized state
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("Debug system failed to initialize a visible console but will use System.Diagnostics.Debug.");
+                // We can still allow logging to System.Diagnostics.Debug by setting initialized to true
+                // but consoleWasAllocatedByThisClass will be false.
+                // For PushMessage to work without the "(Uninitialized Console)" prefix, initialized needs to be true.
+                initialized = true;
+                consoleWasAllocatedByThisClass = false; // Explicitly state no console was allocated by us.
+                Log("Debug system started (fallback to System.Diagnostics.Debug).");
             }
         }
 
-        /// <summary>
-        /// log a standard informational message to the screen
-        /// </summary>
-        /// <param name="message">the message to be logged</param>
         [Conditional("DEBUG")]
-        public static void Log(string message)
+        public static void Log(string message) // Keep your existing Log, LogError, LogWarning
         {
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
             string msg = $"[{timestamp}][LOG] {message}";
@@ -117,102 +123,107 @@ namespace Debugger
             PushMessage(msg);
         }
 
-        /// <summary>
-        /// log an error message to the screen
-        /// </summary>
-        /// <param name="message">the message to be logged</param>
-        [Conditional("DEBUG")]
-        public static void LogError(string message)
+        public static void LogError(string message) // Keep your existing Log, LogError, LogWarning
         {
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
             string msg = $"[{timestamp}][ERROR] {message}";
             messages.Add(msg);
-            PushMessage(msg, ConsoleColor.Red); // Example: Log errors in red
+            PushMessage(msg,ConsoleColor.Red);
         }
 
-        /// <summary>
-        /// log a warning message to the screen
-        /// </summary>
-        /// <param name="message">the message to be loged</param>
-        [Conditional("DEBUG")]
-        public static void LogWarning(string message)
+        public static void LogWarning(string message) // Keep your existing Log, LogError, LogWarning
         {
             string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
             string msg = $"[{timestamp}][WARNING] {message}";
             messages.Add(msg);
-            PushMessage(msg, ConsoleColor.Yellow); // Example: Log warnings in yellow
+            PushMessage(msg,ConsoleColor.Yellow);
         }
 
-        /// <summary>
-        /// push a message, displaying it to the screen
-        /// </summary>
-        /// <param name="fullMessage">the message along with the context</param>
+
         [Conditional("DEBUG")]
         private static void PushMessage(string fullMessage, ConsoleColor? color = null)
         {
-            if (initialized)
+            // Use System.Diagnostics.Debug.WriteLine unconditionally for all messages if you want them in the VS Output window
+            // System.Diagnostics.Debug.WriteLine(fullMessage); 
+
+            if (initialized) // This should now be more reliable
             {
-                // If we successfully allocated a console on Windows and can write to it
+                // Check if we have a usable console window (either pre-existing or allocated)
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && GetConsoleWindow() != IntPtr.Zero)
                 {
-                    ConsoleColor originalColor = Console.ForegroundColor;
-                    if (color.HasValue)
+                    try
                     {
-                        Console.ForegroundColor = color.Value;
+                        ConsoleColor originalColor = Console.ForegroundColor;
+                        if (color.HasValue)
+                        {
+                            Console.ForegroundColor = color.Value;
+                        }
+                        Console.WriteLine(fullMessage); // This will write to the console
+                        if (color.HasValue)
+                        {
+                            Console.ForegroundColor = originalColor;
+                        }
                     }
-                    Console.WriteLine(fullMessage);
-                    if (color.HasValue)
+                    catch (IOException ex) // Handle cases where Console might not be available
                     {
-                        Console.ForegroundColor = originalColor;
+                        System.Diagnostics.Debug.WriteLine($"Console.WriteLine failed: {ex.Message}. Falling back to System.Diagnostics.Debug for: {fullMessage}");
+                        System.Diagnostics.Debug.WriteLine(fullMessage); // Fallback
                     }
                 }
                 else
                 {
-                    // Fallback for non-Windows or if console couldn't be shown,
-                    // write to the IDE's debug output.
-                    System.Diagnostics.Debug.WriteLine(fullMessage);
+                    System.Diagnostics.Debug.WriteLine(fullMessage); // Fallback for non-Windows or no console handle
                 }
             }
             else
             {
-                // If not initialized, still try to output to System.Diagnostics.Debug
-                // This ensures messages aren't lost if OpenConsole wasn't called or failed silently.
-                System.Diagnostics.Debug.WriteLine($"(Uninitialized Console) {fullMessage}");
+                // This case should ideally not be hit if OpenConsole is called and DEBUG is defined.
+                System.Diagnostics.Debug.WriteLine($"(Debug Uninitialized) {fullMessage}");
             }
         }
 
-        /// <summary>
-        /// end the console window (write to file)
-        /// </summary>
         [Conditional("DEBUG")]
         public static void End()
         {
-            Log("Debug session ending. Writing log to file...");
+            // These System.Diagnostics.Debug.WriteLine calls will appear in VS Output Window
+            System.Diagnostics.Debug.WriteLine("Debug.End() method entered.");
+
+            Log("Debug session ending. Writing log to file..."); // This will use PushMessage
             WriteFile();
-            initialized = false; // Mark as uninitialized
-            // No explicit "closing" of the AllocConsole'd window is typically needed,
-            // it closes with the parent process. FreeConsole() exists but can be tricky.
+
+            if (consoleWasAllocatedByThisClass && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                System.Diagnostics.Debug.WriteLine("Attempting to call FreeConsole() as console was allocated by this class.");
+                if (FreeConsole())
+                {
+                    System.Diagnostics.Debug.WriteLine("FreeConsole() returned true.");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine($"FreeConsole() failed. Win32 Error Code: {Marshal.GetLastWin32Error()}");
+                }
+            }
+            else if (initialized && RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                System.Diagnostics.Debug.WriteLine("Skipping FreeConsole() as console was pre-existing or not allocated by this class.");
+            }
+            else
+            {
+                System.Diagnostics.Debug.WriteLine("Skipping FreeConsole() as not on Windows or not initialized for console allocation.");
+            }
+
+            initialized = false;
+            consoleWasAllocatedByThisClass = false;
+            System.Diagnostics.Debug.WriteLine("Debug.End() method finished.");
         }
 
-
-        /// <summary>
-        /// flush the log to the disk
-        /// </summary>
         [Conditional("DEBUG")]
-        private static void WriteFile()
+        private static void WriteFile() // Keep your existing WriteFile
         {
-            // We only attempt to write the file if there are messages.
-            // The initialized check isn't strictly necessary here if we always want to write,
-            // but it's good practice if OpenConsole must be called first.
-            // However, for robustness, let's allow writing even if console init failed,
-            // as long as messages were collected.
             if (messages.Count > 0)
             {
                 try
                 {
-                    // You might want to put this in a more specific logs directory
-                    // e.g., Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs", LogFileName);
-                    // Ensure the directory exists if you do: Directory.CreateDirectory(Path.GetDirectoryName(filePath));
                     string filePath = Path.Combine(Environment.CurrentDirectory, LogFileName);
                     File.WriteAllLines(filePath, messages);
                     PushMessage($"Log successfully written to: {filePath}");
@@ -220,7 +231,6 @@ namespace Debugger
                 catch (Exception ex)
                 {
                     PushMessage($"[ERROR] Failed to write log file: {ex.Message}", ConsoleColor.Red);
-                    // Also output to System.Diagnostics.Debug as a last resort
                     System.Diagnostics.Debug.WriteLine($"[ERROR] Failed to write log file: {ex.Message}");
                 }
             }

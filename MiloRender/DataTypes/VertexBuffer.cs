@@ -10,7 +10,7 @@ namespace MiloRender.DataTypes
     /// <summary>
     /// holds all of the geometry data for a single model
     /// </summary>
-    internal class VertexBuffer
+    public class VertexBuffer
     {
         /// <summary>
         /// generate a vertex buffer of the selected unit scale primitive
