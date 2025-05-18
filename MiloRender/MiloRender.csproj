@@ -96,8 +96,14 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="DataTypes\Actor.cs" />
+    <Compile Include="DataTypes\Camera.cs" />
     <Compile Include="DataTypes\Face.cs" />
+    <Compile Include="DataTypes\Material.cs" />
     <Compile Include="DataTypes\Mesh.cs" />
+    <Compile Include="DataTypes\Primitive.cs" />
+    <Compile Include="DataTypes\Space.cs" />
+    <Compile Include="DataTypes\Transform.cs" />
     <Compile Include="DataTypes\Vertex.cs" />
     <Compile Include="DataTypes\VertexBuffer.cs" />
     <Compile Include="Render.cs" />
