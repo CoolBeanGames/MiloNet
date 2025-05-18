@@ -9,7 +9,7 @@ namespace MiloRender.DataTypes
     /// <summary>
     /// data struture for a single vertex
     /// </summary>
-    internal class Vertex
+    public class Vertex
     {
         /// <summary>
         /// the position in space for the vertex relative to the model

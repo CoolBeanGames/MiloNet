@@ -9,15 +9,15 @@ namespace MiloRender.DataTypes
     /// <summary>
     /// Data Structure holds info for the indices pointing to packed vertex data
     /// </summary>
-    internal class Face
+    public class Face
     {
         /// <summary>
         /// the vertices that make up a face
         /// </summary>
-        float[] indices = { 0, 0, 0 };
+        public float[] indices = { 0, 0, 0 };
         /// <summary>
         /// the normal for the face
         /// </summary>
-        float[] normal = { 0, 0, 0 };
+        public float[] normal = { 0, 0, 0 };
     }
 }

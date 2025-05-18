@@ -16,7 +16,7 @@ namespace MiloRender.DataTypes
         /// generate a vertex buffer of the selected unit scale primitive
         /// </summary>
         /// <param name="type">the type of primitive to generate</param>
-        VertexBuffer(Primitive type)
+        public VertexBuffer(Primitive type)
         {
             //call the appropriate function based on 
             //supplied primitive type to fill all of the
@@ -45,7 +45,7 @@ namespace MiloRender.DataTypes
         /// </summary>
         /// <param name="vertices">the vertex data</param>
         /// <param name="indices">the index data</param>
-        VertexBuffer(float[] vertices, float[] indices)
+        public VertexBuffer(float[] vertices, float[] indices)
         {
 
         }
@@ -55,7 +55,7 @@ namespace MiloRender.DataTypes
         /// </summary>
         /// <param name="vertices">the list of vertices</param>
         /// <param name="faces">the list of faces</param>
-        VertexBuffer(Vertex[] vertices, Face[] faces)
+        public VertexBuffer(Vertex[] vertices, Face[] faces)
         {
 
         }
@@ -112,7 +112,7 @@ namespace MiloRender.DataTypes
 /// <summary>
 /// an enum for what type of primative we want to make
 /// </summary>
-enum Primitive
+public enum Primitive
 {
     Cube,
     Quad,
