@@ -59,6 +59,7 @@
     <Reference Include="Silk.NET.Maths, Version=2.22.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\Silk.NET.Maths.2.22.0\lib\netstandard2.0\Silk.NET.Maths.dll</HintPath>
     </Reference>
+    <Reference Include="Silk.NET.OpenGL, Version=2.22.0.0, Culture=neutral, PublicKeyToken=null" />
     <Reference Include="Silk.NET.SDL, Version=2.22.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\Silk.NET.SDL.2.22.0\lib\netstandard2.0\Silk.NET.SDL.dll</HintPath>
     </Reference>

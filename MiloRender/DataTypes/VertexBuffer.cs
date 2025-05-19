@@ -1,353 +1,221 @@
 ﻿// In MiloRender/DataTypes/VertexBuffer.cs
-using Debugger; // Make sure your Debugger namespace is accessible
+using Debugger;
 using System;
-using System.Collections.Generic;
-using System.Linq;
+using System.Collections.Generic; // For List if you switch, but Linq is for Array.Empty and .Any
+using System.Linq; // For .Any() and Array.Empty
 
 namespace MiloRender.DataTypes
 {
-    /// <summary>
-    /// Holds all of the geometry data for a single model, 
-    /// both in human-readable format (Vertex objects, Face objects)
-    /// and GPU-ready format (packed float arrays for vertices and uint arrays for indices).
-    /// </summary>
-    public class VertexBuffer
+    public class VertexBuffer // Make sure this is public
     {
-        /// <summary>
-        /// An array of GPU readable packed vertex data (Position, Normal, Color, UV).
-        /// </summary>
-        public float[] vertices; // Feed this data into the GPU for Rendering
+        public float[] vertices;
+        public uint[] indices;
+        public Face[] faces; // Human-readable, optional after flush
+        public Vertex[] vertexData; // Human-readable, optional after flush
 
-        /// <summary>
-        /// An array of GPU readable indices that define the geometry's triangles.
-        /// </summary>
-        public uint[] indices;  // Feed this data into the GPU for Rendering
-
-        /// <summary>
-        /// An array of human-readable Face objects.
-        /// </summary>
-        public Face[] faces;
-
-        /// <summary>
-        /// An array of human-readable Vertex objects.
-        /// </summary>
-        public Vertex[] vertexData;
-
-        /// <summary>
-        /// Generates a vertex buffer for a selected unit scale primitive.
-        /// </summary>
-        /// <param name="type">The type of primitive to generate.</param>
         public VertexBuffer(Primitive type)
         {
             Debug.Log($"VertexBuffer: Generating primitive type: {type}");
             switch (type)
             {
-                case Primitive.Triangle:
-                    GenTriangle();
-                    break;
-                case Primitive.Cube:
-                    GenCube();
-                    break;
-                case Primitive.Quad:
-                    GenQuad();
-                    break;
+                case Primitive.Triangle: GenTriangle(); break;
+                case Primitive.Cube: GenCube(); break;
+                case Primitive.Quad: GenQuad(); break;
                 default:
-                    Debug.LogError($"VertexBuffer: Unknown primitive type requested: {type}");
-                    vertexData = new Vertex[0];
-                    faces = new Face[0];
+                    Debug.LogError($"VertexBuffer: Unknown primitive type: {type}");
+                    vertexData = Array.Empty<Vertex>();
+                    faces = Array.Empty<Face>();
                     break;
             }
-            FlushData(); // Convert Vertex/Face data to GPU-ready arrays
+            FlushData();
         }
 
-        /// <summary>
-        /// Generates a vertex buffer from raw float arrays for vertices and uint arrays for indices.
-        /// Note: This constructor does not populate the human-readable 'vertexData' and 'faces' arrays.
-        /// </summary>
-        /// <param name="rawVertices">The packed vertex data (stride of 12 floats: pos(3), norm(3), col(4), uv(2)).</param>
-        /// <param name="rawIndices">The index data defining triangles.</param>
         public VertexBuffer(float[] rawVertices, uint[] rawIndices)
         {
+            // ... (constructor as before)
             if (rawVertices == null || rawIndices == null)
             {
                 Debug.LogError("VertexBuffer Constructor: Raw vertices or indices cannot be null.");
-                // Initialize to empty to prevent null reference errors downstream
-                this.vertices = new float[0];
-                this.indices = new uint[0];
-                this.vertexData = new Vertex[0]; // Explicitly state they are empty
-                this.faces = new Face[0];       // Explicitly state they are empty
+                this.vertices = Array.Empty<float>();
+                this.indices = Array.Empty<uint>();
+                this.vertexData = Array.Empty<Vertex>();
+                this.faces = Array.Empty<Face>();
                 return;
             }
 
             if (rawVertices.Length % Vertex.stride != 0)
             {
-                Debug.LogWarning($"VertexBuffer Constructor: Raw vertices array length ({rawVertices.Length}) is not a multiple of vertex stride ({Vertex.stride}). Data might be misinterpreted.");
+                Debug.LogWarning($"VertexBuffer Constructor: Raw vertices array length ({rawVertices.Length}) is not a multiple of vertex stride ({Vertex.stride}).");
             }
-
             this.vertices = rawVertices;
             this.indices = rawIndices;
-            // Human-readable arrays are not populated by this constructor.
-            // We could try to reconstruct them, but it's complex and lossy (e.g., shared vertices).
-            this.vertexData = new Vertex[0]; // Or null, decide on convention
-            this.faces = new Face[0];       // Or null
-            Debug.Log("VertexBuffer: Created from raw vertex and index data. Human-readable arrays (vertexData, faces) are not populated.");
+            this.vertexData = Array.Empty<Vertex>();
+            this.faces = Array.Empty<Face>();
+            Debug.Log("VertexBuffer: Created from raw vertex/index data.");
         }
 
-        /// <summary>
-        /// Generates a vertex buffer from lists of Vertex and Face objects.
-        /// </summary>
-        /// <param name="sourceVertices">The list of Vertex objects.</param>
-        /// <param name="sourceFaces">The list of Face objects.</param>
         public VertexBuffer(Vertex[] sourceVertices, Face[] sourceFaces)
         {
+            // ... (constructor as before)
             if (sourceVertices == null || sourceFaces == null)
             {
                 Debug.LogError("VertexBuffer Constructor: Source vertices or faces cannot be null.");
-                // Initialize to empty to prevent null reference errors downstream
-                this.vertexData = new Vertex[0];
-                this.faces = new Face[0];
-                this.vertices = new float[0];
-                this.indices = new uint[0];
+                this.vertexData = Array.Empty<Vertex>();
+                this.faces = Array.Empty<Face>();
+                this.vertices = Array.Empty<float>();
+                this.indices = Array.Empty<uint>();
                 return;
             }
-
             this.vertexData = sourceVertices;
             this.faces = sourceFaces;
-            FlushData(); // Convert to GPU-ready arrays
-            Debug.Log($"VertexBuffer: Created from {vertexData.Length} vertices and {faces.Length} faces.");
+            FlushData();
+            Debug.Log($"VertexBuffer: Created from {vertexData.Length}V, {faces.Length}F.");
         }
 
         /// <summary>
-        /// Converts the 'vertexData' and 'faces' arrays into the GPU-ready
-        /// 'vertices' (packed float array) and 'indices' (uint array).
+        /// Checks if the GPU-ready vertex and index data is available and non-empty.
         /// </summary>
+        /// <returns>True if data is ready, false otherwise.</returns>
+        public bool IsDataReady() // Ensure this is public
+        {
+            bool ready = vertices != null && vertices.Length > 0 &&
+                         indices != null && indices.Length > 0;
+            if (!ready)
+            {
+                // Add a debug log if data isn't ready when expected
+                // Debug.LogWarning($"VertexBuffer.IsDataReady: Data is not ready. Vertices: {vertices?.Length ?? -1}, Indices: {indices?.Length ?? -1}");
+            }
+            return ready;
+        }
+
         public void FlushData()
         {
             if (vertexData == null || faces == null)
             {
-                Debug.LogWarning("FlushData: vertexData or faces is null. Cannot flush.");
-                // Ensure vertices and indices are not null if they haven't been initialized
-                vertices = vertices ?? new float[0];
-                indices = indices ?? new uint[0];
+                Debug.LogWarning("FlushData: vertexData or faces is null. Initializing to empty.");
+                vertices = Array.Empty<float>();
+                indices = Array.Empty<uint>();
                 return;
             }
             if (vertexData.Length == 0)
             {
-                Debug.LogWarning("FlushData: No vertex data to flush.");
-                vertices = new float[0];
-                indices = new uint[0];
+                Debug.LogWarning("FlushData: No vertex data. Initializing to empty.");
+                vertices = Array.Empty<float>();
+                indices = Array.Empty<uint>();
+                return;
+            }
+            if (faces.Length == 0) // If no faces, no indices. Still pack vertices if they exist.
+            {
+                Debug.LogWarning("FlushData: No faces defined. Indices array will be empty.");
+                vertices = new float[vertexData.Length * Vertex.stride];
+                for (int i = 0; i < vertexData.Length; i++)
+                {
+                    if (vertexData[i] == null)
+                    {
+                        Debug.LogError($"FlushData: Vertex at index {i} is null while packing vertices for no-face scenario.");
+                        new Vertex().GetPackedVertex().CopyTo(vertices, i * (int)Vertex.stride); // Copy default
+                        continue;
+                    }
+                    vertexData[i].GetPackedVertex().CopyTo(vertices, i * (int)Vertex.stride);
+                }
+                indices = Array.Empty<uint>();
+                // Debug.Log($"FlushData completed: {vertices.Length / Vertex.stride} vertices, 0 indices.");
                 return;
             }
 
-
-            // Allocate memory for the GPU-ready arrays
-            // Each vertex has 'stride' float components.
             vertices = new float[vertexData.Length * Vertex.stride];
-            // Each face defines one triangle (3 indices).
-            indices = new uint[faces.Length * 3];
+            List<uint> tempIndices = new List<uint>(); // Use a list for dynamic sizing
 
-            // Populate the 'vertices' array
             for (int i = 0; i < vertexData.Length; i++)
             {
                 if (vertexData[i] == null)
                 {
-                    Debug.LogError($"FlushData: Vertex at index {i} is null. Skipping.");
-                    // Fill with zeros or a default vertex to avoid downstream issues, and ensure correct array length
+                    Debug.LogError($"FlushData: Vertex at index {i} is null. Using default vertex.");
                     float[] defaultPackedVert = new Vertex().GetPackedVertex();
                     Array.Copy(defaultPackedVert, 0, vertices, i * (int)Vertex.stride, (int)Vertex.stride);
                     continue;
                 }
-                float[] packedVert = vertexData[i].GetPackedVertex();
-                Array.Copy(packedVert, 0, vertices, i * (int)Vertex.stride, (int)Vertex.stride);
+                vertexData[i].GetPackedVertex().CopyTo(vertices, i * (int)Vertex.stride);
             }
 
-            // Populate the 'indices' array
-            int currentIndex = 0;
             for (int i = 0; i < faces.Length; i++)
             {
-                if (faces[i] == null || faces[i].indices == null)
+                if (faces[i] == null || faces[i].indices == null || faces[i].indices.Length != 3)
                 {
-                    Debug.LogError($"FlushData: Face or its indices at index {i} is null. Skipping face.");
-                    // Potentially fill with degenerate triangle indices if strict array length needed for all faces
-                    // For now, this will result in a shorter indices array than expected if faces are skipped
+                    Debug.LogWarning($"FlushData: Face at index {i} is invalid or has != 3 indices. Skipping.");
                     continue;
                 }
-                if (faces[i].indices.Length != 3)
+                if (faces[i].indices.Any(idx => idx >= vertexData.Length))
                 {
-                    Debug.LogWarning($"FlushData: Face at index {i} does not have 3 indices. Skipping face.");
+                    Debug.LogError($"FlushData: Face at index {i} has out-of-bounds vertex index. Max: {vertexData.Length - 1}, Indices: {string.Join(",", faces[i].indices)}. Skipping.");
                     continue;
                 }
-
-                indices[currentIndex++] = faces[i].indices[0];
-                indices[currentIndex++] = faces[i].indices[1];
-                indices[currentIndex++] = faces[i].indices[2];
+                tempIndices.AddRange(faces[i].indices);
             }
+            indices = tempIndices.ToArray();
 
-            // If faces were skipped, the indices array might be oversized. Resize if necessary,
-            // though this is inefficient. Better to ensure valid data upstream.
-            if (currentIndex < indices.Length)
+            if (!IsDataReady() && (vertexData.Length > 0 && faces.Length > 0 && indices.Length == 0))
             {
-                Array.Resize(ref indices, currentIndex);
-                Debug.LogWarning($"FlushData: Indices array resized due to skipped faces. Original: {faces.Length * 3}, Final: {currentIndex}");
+                Debug.LogError("FlushData: CRITICAL - Data flush seems to have failed to produce indices despite source data.");
             }
+            else
+            {
+                Debug.Log($"FlushData: Completed. Vertices: {vertices.Length / Vertex.stride}, Triangles: {indices.Length / 3}.");
+            }
+        }
+        // ... GenTriangle, GenQuad, GenCube, AddFace methods as before ...
+        // Ensure AddFace correctly calculates baseVertexIndex for GenCube
+        // For GenCube (24 vertices total, 4 per face, 6 faces)
+        // faceStartIndex for faces array: 0, 2, 4, 6, 8, 10
+        // vertex array index for those: 0, 4, 8, 12, 16, 20
+        private void AddFace(int faceArrIdx, float[] p1, float[] p2, float[] p3, float[] p4, float[] normal, float[] color)
+        {
+            uint vtxBaseIdx = (uint)(faceArrIdx / 2 * 4);
 
-            Debug.Log($"FlushData: Data flushed. Vertices: {vertices.Length / Vertex.stride}, Indices: {indices.Length}");
+            vertexData[vtxBaseIdx + 0] = new Vertex(p1, normal, color, new float[] { 0, 0 });
+            vertexData[vtxBaseIdx + 1] = new Vertex(p2, normal, color, new float[] { 1, 0 });
+            vertexData[vtxBaseIdx + 2] = new Vertex(p3, normal, color, new float[] { 1, 1 });
+            vertexData[vtxBaseIdx + 3] = new Vertex(p4, normal, color, new float[] { 0, 1 });
+
+            faces[faceArrIdx + 0] = new Face(vtxBaseIdx + 0, vtxBaseIdx + 1, vtxBaseIdx + 2);
+            faces[faceArrIdx + 1] = new Face(vtxBaseIdx + 0, vtxBaseIdx + 2, vtxBaseIdx + 3);
         }
 
-        /// <summary>
-        /// Fills the vertexData and faces with a single, flat-shaded triangle.
-        /// </summary>
+
         private void GenTriangle()
         {
             vertexData = new Vertex[3];
             faces = new Face[1];
-
-            // Define vertices
-            // Positions for a simple triangle
-            // UVs to map a texture simply
-            // Normals are all pointing up (0,1,0) for this basic example or forward (0,0,1)
-            // Colors are distinct for each vertex
-            vertexData[0] = new Vertex( // Bottom-left
-                new float[] { -0.5f, -0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },  // Normal facing camera
-                new float[] { 1.0f, 0.0f, 0.0f, 1.0f }, // Red
-                new float[] { 0.0f, 0.0f }            // UV
-            );
-            vertexData[1] = new Vertex( // Bottom-right
-                new float[] { 0.5f, -0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 0.0f, 1.0f, 0.0f, 1.0f }, // Green
-                new float[] { 1.0f, 0.0f }
-            );
-            vertexData[2] = new Vertex( // Top-middle
-                new float[] { 0.0f, 0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 0.0f, 0.0f, 1.0f, 1.0f }, // Blue
-                new float[] { 0.5f, 1.0f }
-            );
-
-            // Define faces (indices)
-            faces[0] = new Face(0, 1, 2); // Points to the vertices defined above
+            vertexData[0] = new Vertex(new float[] { -0.5f, -0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 1.0f, 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 0.0f });
+            vertexData[1] = new Vertex(new float[] { 0.5f, -0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 1.0f, 0.0f, 1.0f }, new float[] { 1.0f, 0.0f });
+            vertexData[2] = new Vertex(new float[] { 0.0f, 0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 0.0f, 1.0f, 1.0f }, new float[] { 0.5f, 1.0f });
+            faces[0] = new Face(0, 1, 2);
         }
 
-        /// <summary>
-        /// Fills the vertexData and faces with a single, flat-shaded quad (composed of two triangles).
-        /// </summary>
         private void GenQuad()
         {
-            vertexData = new Vertex[4]; // 4 vertices for a quad
-            faces = new Face[2];        // 2 triangles for a quad
-
-            // Define vertices for a quad
-            // Normals facing camera, distinct colors, standard UVs
-            vertexData[0] = new Vertex( // Bottom-left
-                new float[] { -0.5f, -0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 1.0f, 0.0f, 0.0f, 1.0f }, // Red
-                new float[] { 0.0f, 0.0f }
-            );
-            vertexData[1] = new Vertex( // Bottom-right
-                new float[] { 0.5f, -0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 0.0f, 1.0f, 0.0f, 1.0f }, // Green
-                new float[] { 1.0f, 0.0f }
-            );
-            vertexData[2] = new Vertex( // Top-right
-                new float[] { 0.5f, 0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 0.0f, 0.0f, 1.0f, 1.0f }, // Blue
-                new float[] { 1.0f, 1.0f }
-            );
-            vertexData[3] = new Vertex( // Top-left
-                new float[] { -0.5f, 0.5f, 0.0f },
-                new float[] { 0.0f, 0.0f, 1.0f },
-                new float[] { 1.0f, 1.0f, 0.0f, 1.0f }, // Yellow
-                new float[] { 0.0f, 1.0f }
-            );
-
-            // Define faces (triangles)
-            faces[0] = new Face(0, 1, 2); // First triangle (bottom-left, bottom-right, top-right)
-            faces[1] = new Face(0, 2, 3); // Second triangle (bottom-left, top-right, top-left)
-        }
-
-        /// <summary>
-        /// Fills the vertexData and faces with a flat-shaded cube.
-        /// For flat shading, vertices are duplicated for each face to allow unique normals per face.
-        /// This means 24 vertices (4 vertices per face * 6 faces).
-        /// </summary>
-        private void GenCube()
-        {
-            vertexData = new Vertex[24]; // 4 vertices per face * 6 faces = 24 vertices
-            faces = new Face[12];       // 2 triangles per face * 6 faces = 12 faces
-
-            float s = 0.5f; // Half-size for a unit cube centered at origin
-
-            // Define vertices and faces for each side of the cube
-            // Each face will have 4 vertices, and its own normal.
-            // UVs are set for each face to cover 0,0 to 1,1.
-            // Colors are set per-face for distinct face colors.
-
-            // Front face (+Z)
-            float[] frontNormal = { 0, 0, 1 };
-            float[] frontColor = { 1, 0, 0, 1 }; // Red
-            vertexData[0] = new Vertex(new float[] { -s, -s, s }, frontNormal, frontColor, new float[] { 0, 0 });
-            vertexData[1] = new Vertex(new float[] { s, -s, s }, frontNormal, frontColor, new float[] { 1, 0 });
-            vertexData[2] = new Vertex(new float[] { s, s, s }, frontNormal, frontColor, new float[] { 1, 1 });
-            vertexData[3] = new Vertex(new float[] { -s, s, s }, frontNormal, frontColor, new float[] { 0, 1 });
+            vertexData = new Vertex[4];
+            faces = new Face[2];
+            vertexData[0] = new Vertex(new float[] { -0.5f, -0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 1.0f, 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 0.0f });
+            vertexData[1] = new Vertex(new float[] { 0.5f, -0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 1.0f, 0.0f, 1.0f }, new float[] { 1.0f, 0.0f });
+            vertexData[2] = new Vertex(new float[] { 0.5f, 0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 0.0f, 0.0f, 1.0f, 1.0f }, new float[] { 1.0f, 1.0f });
+            vertexData[3] = new Vertex(new float[] { -0.5f, 0.5f, 0.0f }, new float[] { 0.0f, 0.0f, 1.0f }, new float[] { 1.0f, 1.0f, 0.0f, 1.0f }, new float[] { 0.0f, 1.0f });
             faces[0] = new Face(0, 1, 2);
             faces[1] = new Face(0, 2, 3);
+        }
 
-            // Back face (-Z)
-            float[] backNormal = { 0, 0, -1 };
-            float[] backColor = { 0, 1, 0, 1 }; // Green
-            vertexData[4] = new Vertex(new float[] { -s, -s, -s }, backNormal, backColor, new float[] { 1, 0 }); // Note UVs for back
-            vertexData[5] = new Vertex(new float[] { -s, s, -s }, backNormal, backColor, new float[] { 1, 1 });
-            vertexData[6] = new Vertex(new float[] { s, s, -s }, backNormal, backColor, new float[] { 0, 1 });
-            vertexData[7] = new Vertex(new float[] { s, -s, -s }, backNormal, backColor, new float[] { 0, 0 });
-            faces[2] = new Face(4, 5, 6);
-            faces[3] = new Face(4, 6, 7);
+        private void GenCube()
+        {
+            vertexData = new Vertex[24]; // 4 vertices per face * 6 faces
+            faces = new Face[12];       // 2 triangles per face * 6 faces
+            float s = 0.5f;
 
-            // Left face (-X)
-            float[] leftNormal = { -1, 0, 0 };
-            float[] leftColor = { 0, 0, 1, 1 }; // Blue
-            vertexData[8] = new Vertex(new float[] { -s, -s, -s }, leftNormal, leftColor, new float[] { 0, 0 });
-            vertexData[9] = new Vertex(new float[] { -s, s, -s }, leftNormal, leftColor, new float[] { 0, 1 });
-            vertexData[10] = new Vertex(new float[] { -s, s, s }, leftNormal, leftColor, new float[] { 1, 1 });
-            vertexData[11] = new Vertex(new float[] { -s, -s, s }, leftNormal, leftColor, new float[] { 1, 0 });
-            faces[4] = new Face(8, 9, 10);
-            faces[5] = new Face(8, 10, 11);
-
-            // Right face (+X)
-            float[] rightNormal = { 1, 0, 0 };
-            float[] rightColor = { 1, 1, 0, 1 }; // Yellow
-            vertexData[12] = new Vertex(new float[] { s, -s, s }, rightNormal, rightColor, new float[] { 0, 0 });
-            vertexData[13] = new Vertex(new float[] { s, s, s }, rightNormal, rightColor, new float[] { 0, 1 });
-            vertexData[14] = new Vertex(new float[] { s, s, -s }, rightNormal, rightColor, new float[] { 1, 1 });
-            vertexData[15] = new Vertex(new float[] { s, -s, -s }, rightNormal, rightColor, new float[] { 1, 0 });
-            faces[6] = new Face(12, 13, 14);
-            faces[7] = new Face(12, 14, 15);
-
-            // Top face (+Y)
-            float[] topNormal = { 0, 1, 0 };
-            float[] topColor = { 1, 0, 1, 1 }; // Magenta
-            vertexData[16] = new Vertex(new float[] { -s, s, s }, topNormal, topColor, new float[] { 0, 0 });
-            vertexData[17] = new Vertex(new float[] { s, s, s }, topNormal, topColor, new float[] { 1, 0 });
-            vertexData[18] = new Vertex(new float[] { s, s, -s }, topNormal, topColor, new float[] { 1, 1 });
-            vertexData[19] = new Vertex(new float[] { -s, s, -s }, topNormal, topColor, new float[] { 0, 1 });
-            faces[8] = new Face(16, 17, 18);
-            faces[9] = new Face(16, 18, 19);
-
-            // Bottom face (-Y)
-            float[] bottomNormal = { 0, -1, 0 };
-            float[] bottomColor = { 0, 1, 1, 1 }; // Cyan
-            vertexData[20] = new Vertex(new float[] { -s, -s, -s }, bottomNormal, bottomColor, new float[] { 0, 0 });
-            vertexData[21] = new Vertex(new float[] { s, -s, -s }, bottomNormal, bottomColor, new float[] { 1, 0 });
-            vertexData[22] = new Vertex(new float[] { s, -s, s }, bottomNormal, bottomColor, new float[] { 1, 1 });
-            vertexData[23] = new Vertex(new float[] { -s, -s, s }, bottomNormal, bottomColor, new float[] { 0, 1 });
-            faces[10] = new Face(20, 21, 22);
-            faces[11] = new Face(20, 22, 23);
+            AddFace(0, new float[] { -s, -s, s }, new float[] { s, -s, s }, new float[] { s, s, s }, new float[] { -s, s, s }, new float[] { 0, 0, 1 }, new float[] { 1, 0, 0, 1 }); // Front - Red
+            AddFace(2, new float[] { s, -s, -s }, new float[] { -s, -s, -s }, new float[] { -s, s, -s }, new float[] { s, s, -s }, new float[] { 0, 0, -1 }, new float[] { 0, 1, 0, 1 }); // Back - Green
+            AddFace(4, new float[] { -s, -s, -s }, new float[] { -s, -s, s }, new float[] { -s, s, s }, new float[] { -s, s, -s }, new float[] { -1, 0, 0 }, new float[] { 0, 0, 1, 1 }); // Left - Blue
+            AddFace(6, new float[] { s, -s, s }, new float[] { s, -s, -s }, new float[] { s, s, -s }, new float[] { s, s, s }, new float[] { 1, 0, 0 }, new float[] { 1, 1, 0, 1 }); // Right - Yellow
+            AddFace(8, new float[] { -s, s, s }, new float[] { s, s, s }, new float[] { s, s, -s }, new float[] { -s, s, -s }, new float[] { 0, 1, 0 }, new float[] { 1, 0, 1, 1 }); // Top - Magenta
+            AddFace(10, new float[] { -s, -s, -s }, new float[] { s, -s, -s }, new float[] { s, -s, s }, new float[] { -s, -s, s }, new float[] { 0, -1, 0 }, new float[] { 0, 1, 1, 1 }); // Bottom - Cyan
         }
     }
-
-    
 }
