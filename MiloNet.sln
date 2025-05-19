@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MiloRender", "MiloRender\Mi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Debugger", "Debugger\Debugger.csproj", "{F16FE61B-0D88-4A4F-8CF7-D4D796D27A70}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Imports", "Imports\Imports.csproj", "{06312204-2640-40DF-BE9C-F05B412DA2E0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -27,6 +29,10 @@ Global
 		{F16FE61B-0D88-4A4F-8CF7-D4D796D27A70}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{F16FE61B-0D88-4A4F-8CF7-D4D796D27A70}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{F16FE61B-0D88-4A4F-8CF7-D4D796D27A70}.Release|Any CPU.Build.0 = Release|Any CPU
+		{06312204-2640-40DF-BE9C-F05B412DA2E0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{06312204-2640-40DF-BE9C-F05B412DA2E0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{06312204-2640-40DF-BE9C-F05B412DA2E0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{06312204-2640-40DF-BE9C-F05B412DA2E0}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
