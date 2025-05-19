@@ -107,8 +107,11 @@
     <Compile Include="DataTypes\Face.cs" />
     <Compile Include="DataTypes\Material.cs" />
     <Compile Include="DataTypes\Mesh.cs" />
+    <Compile Include="DataTypes\ModelDatabase.cs" />
     <Compile Include="DataTypes\Primitive.cs" />
+    <Compile Include="DataTypes\Scene.cs" />
     <Compile Include="DataTypes\Space.cs" />
+    <Compile Include="DataTypes\Texture2D.cs" />
     <Compile Include="DataTypes\Transform.cs" />
     <Compile Include="DataTypes\Vertex.cs" />
     <Compile Include="DataTypes\VertexBuffer.cs" />

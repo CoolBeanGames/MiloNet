@@ -1,10 +1,11 @@
-﻿using Debugger;
-using MiloRender.DataTypes;
+﻿// In MiloRender/Render.cs
+using Debugger;
+using MiloRender.DataTypes; // For Camera
 using Silk.NET.OpenGL;
 using Silk.NET.Maths;
 using System;
-using System.IO;
-using System.Numerics; // Keep for Material's Vector4 if it still uses it, otherwise can remove if material switches to Silk.NET.Maths
+using System.IO; // <--- Added for File and Path operations
+// System.Numerics might still be used by Material.cs, check there if it can be removed.
 
 namespace MiloRender
 {
@@ -15,32 +16,15 @@ namespace MiloRender
         private Camera _mainCamera;
         private uint _shaderProgram;
 
-        private const string VertexShaderSource = @"#version 330 core
-layout (location = 0) in vec3 aPos;
-layout (location = 1) in vec3 aNormal;
-layout (location = 2) in vec4 aColor;
-layout (location = 3) in vec2 aTexCoords;
+        // Remove old hardcoded shader strings
+        // private const string VertexShaderSource = @"...";
+        // private const string FragmentShaderSource = @"...";
 
-out vec4 vertexColor;
+        // Define paths for external shader files
+        private const string ShaderDirectory = "Shaders"; // Relative to execution directory
+        private const string VertexShaderFileName = "Vertex.glsl";
+        private const string FragmentShaderFileName = "fragment.glsl";
 
-uniform mat4 model;
-uniform mat4 view;
-uniform mat4 projection;
-
-void main()
-{
-    gl_Position = projection * view * model * vec4(aPos, 1.0);
-    vertexColor = aColor;
-}";
-
-        private const string FragmentShaderSource = @"#version 330 core
-out vec4 FragColor;
-in vec4 vertexColor;
-
-void main()
-{
-    FragColor = vertexColor;
-}";
 
         public Render(GL gl, Camera camera)
         {
@@ -56,10 +40,10 @@ void main()
 
             Debug.Log("Render Created.");
             InitOpenGL();
-            if (!InitShaders())
+            if (!InitShaders()) // This will now load from files
             {
-                Debug.LogError("CRITICAL: Failed to initialize shaders. Rendering will not work.");
-                // Consider throwing an exception here or setting a "failed state"
+                Debug.LogError("CRITICAL: Failed to initialize shaders from files. Rendering will not work.");
+                // Consider throwing an exception or setting a "failed state"
             }
         }
 
@@ -73,15 +57,63 @@ void main()
         {
             _gl.ClearColor(0.1f, 0.1f, 0.2f, 1.0f);
             _gl.Enable(EnableCap.DepthTest);
-            // _gl.Enable(EnableCap.CullFace); // Keep commented for now unless definitely needed
             Debug.Log("Render.InitOpenGL: States initialized.");
+        }
+
+        private string LoadShaderSource(string fileName)
+        {
+            string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            string shaderFilePath = Path.Combine(baseDirectory, ShaderDirectory, fileName);
+
+            try
+            {
+                Debug.Log($"Render.LoadShaderSource: Attempting to load shader file: {shaderFilePath}");
+                string shaderSource = File.ReadAllText(shaderFilePath);
+                if (string.IsNullOrWhiteSpace(shaderSource))
+                {
+                    Debug.LogError($"Render.LoadShaderSource: Shader file '{shaderFilePath}' is empty or whitespace.");
+                    return null;
+                }
+                Debug.Log($"Render.LoadShaderSource: Successfully loaded shader file: {fileName}");
+                return shaderSource;
+            }
+            catch (FileNotFoundException)
+            {
+                Debug.LogError($"Render.LoadShaderSource: Shader file not found: {shaderFilePath}");
+                return null;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                Debug.LogError($"Render.LoadShaderSource: Shader directory not found for path: {shaderFilePath}. Ensure '{ShaderDirectory}' exists in output.");
+                return null;
+            }
+            catch (IOException ex)
+            {
+                Debug.LogError($"Render.LoadShaderSource: IO Error reading shader file '{shaderFilePath}': {ex.Message}");
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"Render.LoadShaderSource: Unexpected error loading shader '{shaderFilePath}': {ex.Message}");
+                return null;
+            }
         }
 
         public bool InitShaders()
         {
-            Debug.Log("Render.InitShaders: Initializing shaders...");
+            Debug.Log("Render.InitShaders: Initializing shaders from files...");
+
+            string vertexShaderSource = LoadShaderSource(VertexShaderFileName);
+            string fragmentShaderSource = LoadShaderSource(FragmentShaderFileName);
+
+            if (string.IsNullOrEmpty(vertexShaderSource) || string.IsNullOrEmpty(fragmentShaderSource))
+            {
+                Debug.LogError("Render.InitShaders: Failed to load vertex or fragment shader source from files.");
+                return false;
+            }
+
             uint vertexShader = _gl.CreateShader(ShaderType.VertexShader);
-            _gl.ShaderSource(vertexShader, VertexShaderSource);
+            _gl.ShaderSource(vertexShader, vertexShaderSource);
             _gl.CompileShader(vertexShader);
             _gl.GetShader(vertexShader, ShaderParameterName.CompileStatus, out int vStatus);
             if (vStatus != (int)GLEnum.True)
@@ -92,13 +124,13 @@ void main()
             }
 
             uint fragmentShader = _gl.CreateShader(ShaderType.FragmentShader);
-            _gl.ShaderSource(fragmentShader, FragmentShaderSource);
+            _gl.ShaderSource(fragmentShader, fragmentShaderSource);
             _gl.CompileShader(fragmentShader);
             _gl.GetShader(fragmentShader, ShaderParameterName.CompileStatus, out int fStatus);
             if (fStatus != (int)GLEnum.True)
             {
                 Debug.LogError($"Fragment shader compilation failed: {_gl.GetShaderInfoLog(fragmentShader)}");
-                _gl.DeleteShader(vertexShader);
+                _gl.DeleteShader(vertexShader); // Clean up vertex shader if fragment fails
                 _gl.DeleteShader(fragmentShader);
                 return false;
             }
@@ -111,6 +143,7 @@ void main()
             if (lStatus != (int)GLEnum.True)
             {
                 Debug.LogError($"Shader program linking failed: {_gl.GetProgramInfoLog(_shaderProgram)}");
+                // Detach and delete everything on failure
                 _gl.DetachShader(_shaderProgram, vertexShader);
                 _gl.DetachShader(_shaderProgram, fragmentShader);
                 _gl.DeleteShader(vertexShader);
@@ -120,6 +153,7 @@ void main()
                 return false;
             }
 
+            // Detach and delete individual shaders after successful linking
             _gl.DetachShader(_shaderProgram, vertexShader);
             _gl.DetachShader(_shaderProgram, fragmentShader);
             _gl.DeleteShader(vertexShader);
@@ -129,22 +163,23 @@ void main()
             _gl.GetProgram(_shaderProgram, ProgramPropertyARB.ValidateStatus, out int valStatus);
             if (valStatus != (int)GLEnum.True)
             {
+                // This is often not a critical error but good to know
                 Debug.LogWarning($"Shader program validation failed: {_gl.GetProgramInfoLog(_shaderProgram)}");
             }
             else
             {
-                Debug.Log($"Shader program (ID: {_shaderProgram}) compiled, linked, and validated successfully.");
+                Debug.Log($"Shader program (ID: {_shaderProgram}) compiled, linked, and validated successfully from files.");
             }
 
             LoadShaders(); // Effectively activates the program
             return true;
         }
 
-        public void LoadShaders()
+        public void LoadShaders() // This method now just activates the program
         {
             if (_shaderProgram == 0)
             {
-                Debug.LogError("Render.LoadShaders: Shader program is not initialized.");
+                Debug.LogError("Render.LoadShaders: Shader program is not initialized (ID is 0).");
                 return;
             }
             _gl.UseProgram(_shaderProgram);
@@ -157,16 +192,15 @@ void main()
             _gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
         }
 
-        // This method now handles potentially unsafe direct matrix data.
-        public unsafe void Draw(Mesh m) // Added unsafe keyword
+        public unsafe void Draw(Mesh m)
         {
             if (_gl == null || m == null || _shaderProgram == 0 || _mainCamera == null)
             {
-                Debug.LogWarning("Render.Draw: Prerequisite missing. Cannot draw.");
+                // Debug.LogWarning("Render.Draw: Prerequisite missing (GL, Mesh, ShaderProgram, or MainCamera is null). Cannot draw.");
+                if (_shaderProgram == 0) Debug.LogWarning("Render.Draw: Shader program is 0.");
                 return;
             }
 
-            // Check IsDataReady from VertexBuffer - CS1061 fix depends on VertexBuffer.cs having this public method
             if (m.vertexBuffer == null || !m.vertexBuffer.IsDataReady())
             {
                 Debug.LogWarning($"Render.Draw: Mesh (HashCode: {m.GetHashCode()}) vertex buffer data is not ready. Skipping draw.");
@@ -184,7 +218,7 @@ void main()
                 }
             }
 
-            _gl.UseProgram(_shaderProgram);
+            _gl.UseProgram(_shaderProgram); // Ensure program is used before setting uniforms
             m.Material?.ApplyMaterial(_gl, _shaderProgram);
 
             Matrix4X4<float> modelMatrix = m.Transform.ModelMatrix;
@@ -195,29 +229,34 @@ void main()
             int viewLoc = _gl.GetUniformLocation(_shaderProgram, "view");
             int projLoc = _gl.GetUniformLocation(_shaderProgram, "projection");
 
-            // Using the ToFloatArray extension method, which is safe.
-            // If you were passing pointers directly from matrices, that part would be unsafe.
             if (modelLoc != -1) _gl.UniformMatrix4(modelLoc, 1, false, modelMatrix.ToFloatArray());
-            else Debug.LogWarning("Render.Draw: Uniform 'model' not found.");
+            //else Debug.LogWarning("Render.Draw: Uniform 'model' not found in shader."); // Can be noisy
 
             if (viewLoc != -1) _gl.UniformMatrix4(viewLoc, 1, false, viewMatrix.ToFloatArray());
-            else Debug.LogWarning("Render.Draw: Uniform 'view' not found.");
+            //else Debug.LogWarning("Render.Draw: Uniform 'view' not found in shader.");
 
             if (projLoc != -1) _gl.UniformMatrix4(projLoc, 1, false, projectionMatrix.ToFloatArray());
-            else Debug.LogWarning("Render.Draw: Uniform 'projection' not found.");
+            //else Debug.LogWarning("Render.Draw: Uniform 'projection' not found in shader.");
+
 
             _gl.BindVertexArray(m.GetVAO());
 
             if (m.GetIndexCount() > 0)
             {
-                _gl.DrawElements(PrimitiveType.Triangles, (uint)m.GetIndexCount(), DrawElementsType.UnsignedInt, null); // Changed (void*)0 to null for modern GL
+                _gl.DrawElements(PrimitiveType.Triangles, (uint)m.GetIndexCount(), DrawElementsType.UnsignedInt, null);
             }
             else
             {
                 Debug.LogWarning($"Render.Draw: Mesh (HashCode: {m.GetHashCode()}) has no indices to draw.");
             }
 
-            _gl.BindVertexArray(0);
+            _gl.BindVertexArray(0); // Unbind VAO
+            // _gl.UseProgram(0); // Unbind shader program - Optional, good practice if mixing shaders often
+        }
+
+        public Camera GetCurrentCamera() // New method
+        {
+            return _mainCamera;
         }
 
         public void EndDraw()
@@ -235,7 +274,7 @@ void main()
         {
             if (disposing)
             {
-                // Managed resources
+                // Dispose managed resources if any
             }
 
             if (_gl != null && _shaderProgram != 0)
@@ -244,7 +283,7 @@ void main()
                 Debug.Log($"Render: Shader program (ID: {_shaderProgram}) deleted.");
                 _shaderProgram = 0;
             }
-            _gl = null;
+            _gl = null; // Release GL context reference
 
             if (instance == this)
             {
@@ -258,7 +297,8 @@ void main()
         }
     }
 
-    public static class MatrixExtensions // Keep this extension method
+    // MatrixExtensions class remains the same
+    public static class MatrixExtensions
     {
         public static float[] ToFloatArray(this Matrix4X4<float> matrix)
         {

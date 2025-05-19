@@ -57,6 +57,9 @@
     <Reference Include="Silk.NET.OpenGL, Version=2.22.0.0, Culture=neutral, processorArchitecture=MSIL">
       <HintPath>..\packages\Silk.NET.OpenGL.2.22.0\lib\netstandard2.0\Silk.NET.OpenGL.dll</HintPath>
     </Reference>
+    <Reference Include="StbImageSharp, Version=2.30.15.0, Culture=neutral, processorArchitecture=MSIL">
+      <HintPath>..\packages\StbImageSharp.2.30.15\lib\net471\StbImageSharp.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Buffers, Version=4.0.3.0, Culture=neutral, PublicKeyToken=cc7b13ffcd2ddd51, processorArchitecture=MSIL">
       <HintPath>..\packages\System.Buffers.4.5.1\lib\net461\System.Buffers.dll</HintPath>

@@ -1,59 +1,74 @@
 ﻿// In MiloRender/DataTypes/Material.cs
 using Silk.NET.OpenGL;
-using System.Numerics; // For Vector4
+using System.Numerics;
 using Debugger;
 
 namespace MiloRender.DataTypes
 {
     public class Material
     {
-        // We won't store ShaderProgram here anymore, as the Renderer manages the active shader.
-        // The material will primarily define shader *parameters* (uniforms).
-
         public Vector4 BaseColorTint { get; set; }
-        // public uint AlbedoTexture { get; set; } // For later
-
-        // We might add other properties like shininess, metallic, roughness etc.
+        public Texture2D AlbedoTexture { get; set; } // This property remains
 
         public Material()
         {
-            BaseColorTint = Vector4.One; // Default to white (1,1,1,1)
-            Debug.Log("Material: Default material created.");
+            BaseColorTint = Vector4.One;
+            AlbedoTexture = null;
+            // Debug.Log("Material: Default material created."); // Less verbose
         }
 
-        /// <summary>
-        /// Applies material properties (uniforms) to the currently bound shader program.
-        /// </summary>
-        /// <param name="gl">The OpenGL context.</param>
-        /// <param name="shaderProgramHandle">The handle of the currently active shader program.</param>
+        // Constructor to easily assign a texture
+        public Material(Texture2D albedoTexture) : this()
+        {
+            AlbedoTexture = albedoTexture;
+        }
+
         public virtual void ApplyMaterial(GL gl, uint shaderProgramHandle)
         {
             if (gl == null || shaderProgramHandle == 0)
             {
-                Debug.LogWarning("Material.ApplyMaterial: GL context or shader program handle is invalid.");
+                // Debug.LogWarning("Material.ApplyMaterial: GL context or shader program handle is invalid.");
                 return;
             }
 
-            // Example: Set a base color tint uniform if the shader supports it
-            // For our current simple shader, this isn't used, but it's good to have the structure.
-            // int tintColorLoc = gl.GetUniformLocation(shaderProgramHandle, "u_baseColorTint");
-            // if (tintColorLoc != -1)
-            // {
-            //     gl.Uniform4(tintColorLoc, BaseColorTint.X, BaseColorTint.Y, BaseColorTint.Z, BaseColorTint.W);
-            // }
-            // else
-            // {
-            //     // Debug.LogWarning("Material.ApplyMaterial: Uniform 'u_baseColorTint' not found in shader.");
-            // }
+            // Tint (example, shader doesn't use u_baseColorTint yet)
+            int tintColorLoc = gl.GetUniformLocation(shaderProgramHandle, "u_baseColorTint");
+            if (tintColorLoc != -1)
+            {
+                gl.Uniform4(tintColorLoc, BaseColorTint.X, BaseColorTint.Y, BaseColorTint.Z, BaseColorTint.W);
+            }
 
-            // Later, for textures:
-            // int albedoTexLoc = gl.GetUniformLocation(shaderProgramHandle, "u_albedoTexture");
-            // if (albedoTexLoc != -1 && AlbedoTexture != 0)
-            // {
-            //     gl.ActiveTexture(TextureUnit.Texture0); // Activate texture unit 0
-            //     gl.BindTexture(TextureTarget.Texture2D, AlbedoTexture);
-            //     gl.Uniform1(albedoTexLoc, 0); // Tell shader to use texture unit 0 for u_albedoTexture
-            // }
+            // Apply Albedo Texture
+            if (AlbedoTexture != null)
+            {
+                if (!AlbedoTexture.IsUploaded)
+                {
+                    // Option 1: Try to upload it now (might introduce stutter if called mid-frame for new textures)
+                    // Debug.LogWarning($"Material.ApplyMaterial: AlbedoTexture '{AlbedoTexture.Name}' not uploaded. Attempting upload.");
+                    // AlbedoTexture.UploadToGPU();
+
+                    // Option 2: Log a warning and skip (safer for performance during draw calls)
+                    Debug.LogWarning($"Material.ApplyMaterial: AlbedoTexture '{AlbedoTexture.Name}' (Handle: {AlbedoTexture.Handle}) is not uploaded to GPU. Skipping bind.");
+                    return; // Or proceed without texture
+                }
+
+                if (AlbedoTexture.Handle == 0) // Double check after IsUploaded potentially
+                {
+                    Debug.LogWarning($"Material.ApplyMaterial: AlbedoTexture '{AlbedoTexture.Name}' is marked uploaded but Handle is 0. Skipping bind.");
+                    return;
+                }
+
+                int albedoTexUniformLoc = gl.GetUniformLocation(shaderProgramHandle, "u_albedoTexture");
+                if (albedoTexUniformLoc != -1)
+                {
+                    AlbedoTexture.Bind(TextureUnit.Texture0); // Bind to texture unit 0
+                    gl.Uniform1(albedoTexUniformLoc, 0);      // Tell shader sampler to use texture unit 0
+                }
+                // else
+                // {
+                //     Debug.LogWarning($"Material.ApplyMaterial: Uniform 'u_albedoTexture' not found in shader for texture '{AlbedoTexture.Name}'.");
+                // }
+            }
         }
     }
 }
