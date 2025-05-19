@@ -104,13 +104,17 @@
   <ItemGroup>
     <Compile Include="DataTypes\Actor.cs" />
     <Compile Include="DataTypes\Camera.cs" />
+    <Compile Include="DataTypes\DirectionalLight.cs" />
     <Compile Include="DataTypes\Face.cs" />
+    <Compile Include="DataTypes\Light.cs" />
+    <Compile Include="DataTypes\LightType.cs" />
     <Compile Include="DataTypes\Material.cs" />
     <Compile Include="DataTypes\Mesh.cs" />
     <Compile Include="DataTypes\ModelDatabase.cs" />
     <Compile Include="DataTypes\Primitive.cs" />
     <Compile Include="DataTypes\Scene.cs" />
     <Compile Include="DataTypes\Space.cs" />
+    <Compile Include="DataTypes\SpotLight.cs" />
     <Compile Include="DataTypes\Texture2D.cs" />
     <Compile Include="DataTypes\Transform.cs" />
     <Compile Include="DataTypes\Vertex.cs" />

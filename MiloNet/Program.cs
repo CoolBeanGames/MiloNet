@@ -5,10 +5,7 @@ using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Debugger;
 using MiloRender;
-using MiloRender.DataTypes;
-using System.IO;
-using Imports;
-using System.Linq;
+using MiloRender.DataTypes; // For Camera (fallback)
 
 namespace MiloNet
 {
@@ -17,7 +14,8 @@ namespace MiloNet
         private static IWindow _window;
         private static GL _gl;
         private static Render _render;
-        private static Scene _currentScene;
+        private static Camera _fallbackCamera;
+        private static Scene _mainGameScene; // Program.cs can hold a reference if needed, or get it from Game
 
         static void Main(string[] args)
         {
@@ -37,95 +35,106 @@ namespace MiloNet
             _window.Update += OnUpdate;
             _window.Render += OnRenderFrame;
             _window.Resize += OnResize;
-            _window.Closing += OnWindowClosing; // This event is key for GL cleanup
+            _window.Closing += OnWindowClosing;
 
             Debug.Log("MiloNet: Starting window run loop.");
-            _window.Run(); // This blocks until the window is closed
+            _window.Run();
 
-            // After Run() exits, the window object might still exist, but its GL context might be gone or non-current.
-            // Most GL cleanup should have happened in OnWindowClosing.
             Debug.Log("MiloNet: Window run loop exited.");
 
-            _window?.Dispose(); // Dispose the window object itself
+            ModelDatabase.ClearAndDisposeAll();
+            Debug.Log("MiloNet: ModelDatabase cleared and disposed.");
+            _render?.Dispose();
+            Debug.Log("MiloNet: Renderer disposed.");
+            _window?.Dispose();
             Debug.Log("MiloNet: Window disposed.");
-
             Debug.End();
         }
 
         static void OnLoad()
         {
-            Debug.Log("MiloNet: Window Loaded. Initializing OpenGL and game resources...");
+            Debug.Log("MiloNet: Window Loaded. Initializing OpenGL and Render subsystem...");
 
             _gl = _window.CreateOpenGL();
-            if (_gl == null) { /* ... error handling ... */ _window.Close(); return; }
+            if (_gl == null) { Debug.LogError("MiloNet: Failed to create OpenGL context!"); _window.Close(); return; }
             Debug.Log($"MiloNet: OpenGL context created. Version: {_gl.GetStringS(StringName.Version)}");
 
-            var initialCamera = new MiloRender.DataTypes.Camera();
-            initialCamera.Transform.LocalPosition = new Vector3D<float>(0, 1f, 5.0f);
-            Debug.Log("MiloNet: Initial fallback camera created for renderer.");
+            _fallbackCamera = new MiloRender.DataTypes.Camera();
+            _fallbackCamera.Transform.LocalPosition = new Vector3D<float>(0, 1f, 5.0f);
+            Debug.Log("MiloNet: Engine fallback camera created.");
 
             try
             {
-                _render = new Render(_gl, initialCamera);
-                Debug.Log("MiloNet: Renderer initialized.");
+                _render = new Render(_gl, _fallbackCamera); // Initialize renderer with the fallback
+                Debug.Log("MiloNet: Renderer initialized with fallback camera.");
             }
-            catch (Exception ex) { /* ... error handling ... */ _gl?.Dispose(); _window.Close(); return; }
+            catch (Exception ex)
+            {
+                Debug.LogError($"MiloNet: CRITICAL - Renderer initialization failed: {ex.Message} - {ex.StackTrace}");
+                _gl?.Dispose(); _window.Close(); return;
+            }
 
             _gl.Viewport(0, 0, (uint)_window.FramebufferSize.X, (uint)_window.FramebufferSize.Y);
 
+            // Initialize the Game module. Game.Init now returns the loaded scene.
+            Scene gameSceneFromInit = null;
             try
             {
-                string modelFileName = "your_model.glb";
-                string executableLocation = AppDomain.CurrentDomain.BaseDirectory;
-                string modelPath = Path.Combine(executableLocation, "Assets", modelFileName);
-
-                Debug.Log($"MiloNet: Attempting to load GLB as scene from: {modelPath}");
-
-                Scene loadedScene = GLBImporter.LoadGlbAsScene(_gl, modelPath);
-
-                if (loadedScene != null)
-                {
-                    ModelDatabase.AddScene(loadedScene);
-                    _currentScene = loadedScene;
-                    Debug.Log($"MiloNet: Scene '{loadedScene.Name}' loaded. Models: {loadedScene.Models.Count}");
-                    if (_currentScene.ActiveCamera != null)
-                    {
-                        _render.SetCamera(_currentScene.ActiveCamera);
-                        Debug.Log($"MiloNet: Renderer camera updated to scene's camera (Hash: '{_currentScene.ActiveCamera.GetHashCode()}').");
-                    }
-                    else
-                    {
-                        Debug.LogWarning($"MiloNet: Loaded scene '{_currentScene.Name}' has NO active camera. Renderer will use its fallback.");
-                    }
-                }
-                else { Debug.LogError($"MiloNet: Failed to load GLB as scene from '{modelPath}'."); }
+                gameSceneFromInit = Game.Init(_gl); // Game.Init only needs GL for GLBImporter
+                _mainGameScene = gameSceneFromInit; // Program can keep a reference if needed
             }
-            catch (Exception ex) { Debug.LogError($"MiloNet: Exception during scene loading: {ex.Message} - {ex.StackTrace}"); }
+            catch (Exception ex)
+            {
+                Debug.LogError($"MiloNet: Exception during Game.Init(): {ex.Message} - {ex.StackTrace}");
+            }
+
+            // Program.cs decides which camera the renderer uses based on Game.Init's result.
+            if (gameSceneFromInit != null && gameSceneFromInit.ActiveCamera != null)
+            {
+                _render.SetCamera(gameSceneFromInit.ActiveCamera);
+                Debug.Log("MiloNet.OnLoad: Renderer camera set to game scene's active camera.");
+            }
+            else
+            {
+                // If gameScene is null or has no camera, renderer continues using _fallbackCamera.
+                Debug.LogWarning("MiloNet.OnLoad: Game scene is null or has no camera. Renderer continues with fallback camera.");
+                // _render.SetCamera(_fallbackCamera); // Already set during _render init, but can be explicit
+            }
+
             Debug.Log("MiloNet: OnLoad complete.");
         }
 
         static void OnUpdate(double deltaTime)
         {
-            if (_currentScene != null && _currentScene.Models != null && _currentScene.Models.Any())
-            {
-                var firstModel = _currentScene.Models[0];
-                float rotationSpeed = 20.0f * (float)deltaTime;
-                firstModel.Transform.LocalRotation *= Quaternion<float>.CreateFromAxisAngle(Vector3D<float>.UnitY, Scalar.DegreesToRadians(rotationSpeed));
-            }
+            Game.Update((float)deltaTime);
         }
 
         static void OnRenderFrame(double delta)
         {
             if (_render == null || _gl == null) return;
-            _render.BeginDraw();
-            if (_currentScene != null)
+
+            // Ensure a camera is active on the renderer.
+            // This handles edge cases where Game.Init might have failed or scene camera became null.
+            if (_render.GetCurrentCamera() == null)
             {
-                if (_currentScene.ActiveCamera != null && _render.GetCurrentCamera() != _currentScene.ActiveCamera)
-                {
-                    _render.SetCamera(_currentScene.ActiveCamera);
-                }
-                _currentScene.Draw();
+                _render.SetCamera(_fallbackCamera);
+                Debug.LogWarning("Program.OnRenderFrame: Renderer camera was null, set to fallback.");
             }
+            // If _mainGameScene exists, and its camera configuration changed, update renderer camera
+            else if (_mainGameScene != null && _mainGameScene.ActiveCamera != null && _render.GetCurrentCamera() != _mainGameScene.ActiveCamera)
+            {
+                _render.SetCamera(_mainGameScene.ActiveCamera);
+                Debug.Log("Program.OnRenderFrame: Updated renderer camera to game scene's active camera.");
+            }
+            else if (_mainGameScene != null && _mainGameScene.ActiveCamera == null && _render.GetCurrentCamera() != _fallbackCamera)
+            {
+                _render.SetCamera(_fallbackCamera); // Scene exists but lost its camera, use fallback
+                Debug.LogWarning("Program.OnRenderFrame: Game scene has no active camera, renderer set to fallback.");
+            }
+
+
+            _render.BeginDraw();
+            Game.RenderFrame();
             _render.EndDraw();
         }
 
@@ -134,26 +143,11 @@ namespace MiloNet
             if (_gl == null) return;
             Debug.Log($"MiloNet: Window Framebuffer resized to {newFramebufferSize.X}x{newFramebufferSize.Y}. Updating GL viewport.");
             _gl.Viewport(0, 0, (uint)newFramebufferSize.X, (uint)newFramebufferSize.Y);
-            var camToUpdate = _currentScene?.ActiveCamera ?? _render?.GetCurrentCamera();
-            camToUpdate?.SetGameWorldAspectRatio(320, 240);
         }
 
-        // This event is triggered when the user attempts to close the window,
-        // while the window and its GL context are typically still valid and current.
         static void OnWindowClosing()
         {
-            Debug.Log("MiloNet: Window Closing event triggered. Cleaning up OpenGL resources NOW.");
-
-            // Dispose game-specific resources that use OpenGL
-            ModelDatabase.ClearAndDisposeAll();
-            Debug.Log("MiloNet: ModelDatabase cleared and disposed.");
-
-            // Dispose the Renderer (which disposes shader programs)
-            _render?.Dispose();
-            Debug.Log("MiloNet: Renderer disposed.");
-
-            // The _gl context itself will be cleaned up when the window is disposed after _window.Run() finishes.
-            // No need to call _gl.Dispose() here, as the context needs to remain for the above disposals.
+            Debug.Log("MiloNet: Window Closing event. Resources will be cleaned up in Main after loop exits.");
         }
     }
 }
