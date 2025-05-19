@@ -6,7 +6,8 @@ using Debugger;
 using Imports;             // For GLBImporter
 using MiloRender.DataTypes;  // For Scene
 using Silk.NET.OpenGL;     // For GL (needed by GLBImporter)
-using Silk.NET.Maths;      // For Vector3D, Quaternion, Scalar
+using Silk.NET.Maths;
+using MiloRender;      // For Vector3D, Quaternion, Scalar
 
 namespace MiloNet
 {
@@ -56,12 +57,12 @@ namespace MiloNet
             {
                 return;
             }
-
+            var camera = Render.instance.GetCurrentCamera();
             var firstModel = _gameScene.Models[0];
             if (firstModel != null)
             {
                 float rotationSpeed = 20.0f * deltaTime;
-                firstModel.Transform.Rotate(Vector3D<float>.UnitY, rotationSpeed, Space.Self);
+                camera.Transform.Rotate(Vector3D<float>.UnitY, rotationSpeed, Space.Self);
             }
         }
 

@@ -10,8 +10,9 @@ using MiloRender.DataTypes;
 using Silk.NET.OpenGL;
 using Silk.NET.Maths;
 using StbImageSharp;
-using MiloNet;
+using MiloNet; // For ModelDatabase
 using System.Numerics;
+using System.Globalization; // For float.TryParse with InvariantCulture
 
 // Using aliases
 using MiloMesh = MiloRender.DataTypes.Mesh;
@@ -19,7 +20,12 @@ using MiloMaterial = MiloRender.DataTypes.Material;
 using MiloTexture2D = MiloRender.DataTypes.Texture2D;
 using MiloScene = MiloRender.DataTypes.Scene;
 using MiloEngineCamera = MiloRender.DataTypes.Camera;
+using MiloLight = MiloRender.DataTypes.Light;
+using MiloDirectionalLight = MiloRender.DataTypes.DirectionalLight;
+using MiloSpotLight = MiloRender.DataTypes.SpotLight;
+
 using AssimpNETScene = Assimp.Scene;
+using AssimpNETLight = Assimp.Light;
 using AssimpNETCamera = Assimp.Camera;
 using AssimpNETVector3D = Assimp.Vector3D;
 using AssimpNETMatrix4x4 = Assimp.Matrix4x4;
@@ -54,132 +60,154 @@ namespace Imports
             );
         }
 
+        private static Silk.NET.Maths.Vector3D<float> ToSilkVector3D(AssimpNETVector3D assimpVec)
+        {
+            return new Silk.NET.Maths.Vector3D<float>(assimpVec.X, assimpVec.Y, assimpVec.Z);
+        }
+
         private static Silk.NET.Maths.Matrix4X4<float> CalculateWorldTransform(Node node)
         {
             if (node == null)
                 return Silk.NET.Maths.Matrix4X4<float>.Identity;
 
-            AssimpNETMatrix4x4 transform = node.Transform;
-            Node parent = node.Parent;
-            // Traverse up to the root node to accumulate transforms
-            // The RootNode.Transform itself is the transform of the entire scene relative to the world (often identity).
-            // Individual node transforms are relative to their parent.
             Stack<AssimpNETMatrix4x4> transformStack = new Stack<AssimpNETMatrix4x4>();
-            transformStack.Push(node.Transform);
-            Node currentParent = node.Parent;
-            while (currentParent != null && currentParent.Parent != null) // Go up to the direct child of the root.
+            Node currentNode = node;
+            while (currentNode != null)
             {
-                transformStack.Push(currentParent.Transform);
-                currentParent = currentParent.Parent;
+                transformStack.Push(currentNode.Transform);
+                currentNode = currentNode.Parent;
             }
-            // If currentParent is now the root (or null if node was root), apply root transform if it exists
-            if (currentParent != null) // This should be the root node
-            {
-                transformStack.Push(currentParent.Transform);
-            }
-
 
             AssimpNETMatrix4x4 finalTransform = AssimpNETMatrix4x4.Identity;
             while (transformStack.Count > 0)
             {
                 finalTransform = finalTransform * transformStack.Pop();
             }
-
             return ToSilkMatrix(finalTransform);
         }
 
         public static MiloScene LoadGlbAsScene(GL gl, string filePath)
         {
-            if (string.IsNullOrEmpty(filePath)) { Debug.LogError("..."); return null; }
-            if (!File.Exists(filePath)) { Debug.LogError("..."); return null; }
-            if (gl == null) { Debug.LogError("..."); return null; }
+            if (string.IsNullOrEmpty(filePath)) { Debug.LogError("GLBImporter: FilePath is null or empty."); return null; }
+            if (!File.Exists(filePath)) { Debug.LogError($"GLBImporter: File not found: {filePath}"); return null; }
+            if (gl == null) { Debug.LogError("GLBImporter: GL context is null."); return null; }
 
             Debug.Log($"GLBImporter.LoadGlbAsScene: Attempting to load GLB: {filePath}");
             AssimpContext importer = new AssimpContext();
-            const PostProcessSteps steps = PostProcessSteps.Triangulate | PostProcessSteps.GenerateSmoothNormals | PostProcessSteps.FlipUVs | PostProcessSteps.JoinIdenticalVertices | PostProcessSteps.CalculateTangentSpace;
-            AssimpNETScene assimpSceneData;
-            try { assimpSceneData = importer.ImportFile(filePath, steps); }
-            catch (Exception ex) { Debug.LogError($"GLBImporter.LoadGlbAsScene: Assimp import failed. Exception: {ex.Message} {ex.StackTrace}"); importer.Dispose(); return null; }
+            importer.SetConfig(new NormalSmoothingAngleConfig(66.0f));
+            const PostProcessSteps steps = PostProcessSteps.Triangulate |
+                                           PostProcessSteps.GenerateSmoothNormals |
+                                           PostProcessSteps.FlipUVs |
+                                           PostProcessSteps.JoinIdenticalVertices |
+                                           PostProcessSteps.CalculateTangentSpace |
+                                           PostProcessSteps.SortByPrimitiveType |
+                                           PostProcessSteps.EmbedTextures |
+                                           PostProcessSteps.ImproveCacheLocality;
 
-            if (assimpSceneData == null || !assimpSceneData.HasMeshes || assimpSceneData.MeshCount == 0) { Debug.LogError("..."); importer.Dispose(); return null; }
+            AssimpNETScene assimpSceneData;
+            try
+            {
+                assimpSceneData = importer.ImportFile(filePath, steps);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"GLBImporter.LoadGlbAsScene: Assimp import failed. Exception: {ex.Message} {ex.StackTrace}");
+                importer.Dispose();
+                return null;
+            }
+
+            if (assimpSceneData == null)
+            {
+                Debug.LogError("GLBImporter.LoadGlbAsScene: Assimp scene data is null after import.");
+                importer.Dispose();
+                return null;
+            }
 
             string sceneName = Path.GetFileNameWithoutExtension(filePath);
             MiloScene newMiloScene = new MiloScene(sceneName, gl);
-            Debug.Log($"GLBImporter: Created MiloScene: '{sceneName}'. Processing {assimpSceneData.MeshCount} meshes.");
+            Debug.Log($"GLBImporter: Created MiloScene: '{sceneName}'. Processing...");
 
-            for (int meshIdx = 0; meshIdx < assimpSceneData.MeshCount; meshIdx++)
+            if (assimpSceneData.HasMeshes)
             {
-                Assimp.Mesh assimpMesh = assimpSceneData.Meshes[meshIdx];
-                string assimpMeshName = string.IsNullOrEmpty(assimpMesh.Name) ? $"UnnamedMesh_{sceneName}_{meshIdx}" : assimpMesh.Name;
-                MiloMaterial miloMaterial = new MiloMaterial();
-                if (assimpSceneData.HasMaterials && assimpMesh.MaterialIndex >= 0 && assimpMesh.MaterialIndex < assimpSceneData.MaterialCount)
+                Debug.Log($"GLBImporter: Processing {assimpSceneData.MeshCount} meshes.");
+                for (int meshIdx = 0; meshIdx < assimpSceneData.MeshCount; meshIdx++)
                 {
-                    Assimp.Material assimpMaterial = assimpSceneData.Materials[assimpMesh.MaterialIndex];
-                    if (assimpMaterial.GetMaterialTexture(TextureType.Diffuse, 0, out TextureSlot textureSlot))
+                    Assimp.Mesh assimpMesh = assimpSceneData.Meshes[meshIdx];
+                    if (assimpMesh.PrimitiveType != Assimp.PrimitiveType.Triangle)
                     {
-                        MiloTexture2D loadedTexture = ProcessAssimpTextureSlot(gl, textureSlot, assimpSceneData, filePath);
-                        miloMaterial.AlbedoTexture = (loadedTexture != null && loadedTexture.IsUploaded) ? loadedTexture : GetOrCreateDefaultPinkTexture(gl);
+                        Debug.LogWarning($"GLBImporter: Skipping mesh '{assimpMesh.Name}' as it's not made of triangles (Type: {assimpMesh.PrimitiveType}).");
+                        continue;
+                    }
+
+                    string assimpMeshName = string.IsNullOrEmpty(assimpMesh.Name) ? $"UnnamedMesh_{sceneName}_{meshIdx}" : assimpMesh.Name;
+                    MiloMaterial miloMaterial = new MiloMaterial();
+                    if (assimpSceneData.HasMaterials && assimpMesh.MaterialIndex >= 0 && assimpMesh.MaterialIndex < assimpSceneData.MaterialCount)
+                    {
+                        Assimp.Material assimpMaterial = assimpSceneData.Materials[assimpMesh.MaterialIndex];
+                        if (assimpMaterial.GetMaterialTexture(TextureType.Diffuse, 0, out TextureSlot textureSlot))
+                        {
+                            MiloTexture2D loadedTexture = ProcessAssimpTextureSlot(gl, textureSlot, assimpSceneData, filePath);
+                            miloMaterial.AlbedoTexture = (loadedTexture != null && loadedTexture.IsUploaded) ? loadedTexture : GetOrCreateDefaultPinkTexture(gl);
+                        }
+                        else { miloMaterial.AlbedoTexture = GetOrCreateDefaultPinkTexture(gl); }
+
+                        if (assimpMaterial.HasColorDiffuse)
+                        {
+                            miloMaterial.BaseColorTint = new System.Numerics.Vector4(assimpMaterial.ColorDiffuse.R, assimpMaterial.ColorDiffuse.G, assimpMaterial.ColorDiffuse.B, assimpMaterial.ColorDiffuse.A);
+                        }
                     }
                     else { miloMaterial.AlbedoTexture = GetOrCreateDefaultPinkTexture(gl); }
-                    if (assimpMaterial.HasColorDiffuse) { miloMaterial.BaseColorTint = new System.Numerics.Vector4(assimpMaterial.ColorDiffuse.R, assimpMaterial.ColorDiffuse.G, assimpMaterial.ColorDiffuse.B, assimpMaterial.ColorDiffuse.A); }
-                }
-                else { miloMaterial.AlbedoTexture = GetOrCreateDefaultPinkTexture(gl); }
 
-                List<float> packedVertexDataList = new List<float>();
-                bool hasNormals = assimpMesh.HasNormals; bool hasTexCoords = assimpMesh.HasTextureCoords(0); bool hasVertexColors = assimpMesh.HasVertexColors(0);
-                for (int i = 0; i < assimpMesh.VertexCount; i++)
-                {
-                    packedVertexDataList.Add(assimpMesh.Vertices[i].X); packedVertexDataList.Add(assimpMesh.Vertices[i].Y); packedVertexDataList.Add(assimpMesh.Vertices[i].Z);
-                    if (hasNormals) { packedVertexDataList.Add(assimpMesh.Normals[i].X); packedVertexDataList.Add(assimpMesh.Normals[i].Y); packedVertexDataList.Add(assimpMesh.Normals[i].Z); } else { packedVertexDataList.Add(0.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(0.0f); }
-                    if (hasVertexColors) { Assimp.Color4D color = assimpMesh.VertexColorChannels[0][i]; packedVertexDataList.Add(color.R); packedVertexDataList.Add(color.G); packedVertexDataList.Add(color.B); packedVertexDataList.Add(color.A); } else { packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); }
-                    if (hasTexCoords) { AssimpNETVector3D tc = assimpMesh.TextureCoordinateChannels[0][i]; packedVertexDataList.Add(tc.X); packedVertexDataList.Add(tc.Y); } else { packedVertexDataList.Add(0.0f); packedVertexDataList.Add(0.0f); }
-                }
-                List<uint> indexList = new List<uint>(); foreach (Assimp.Face f in assimpMesh.Faces) { if (f.IndexCount == 3) { indexList.Add((uint)f.Indices[0]); indexList.Add((uint)f.Indices[1]); indexList.Add((uint)f.Indices[2]); } }
+                    List<float> packedVertexDataList = new List<float>();
+                    bool hasNormals = assimpMesh.HasNormals; bool hasTexCoords = assimpMesh.HasTextureCoords(0); bool hasVertexColors = assimpMesh.HasVertexColors(0);
+                    for (int i = 0; i < assimpMesh.VertexCount; i++)
+                    {
+                        packedVertexDataList.Add(assimpMesh.Vertices[i].X); packedVertexDataList.Add(assimpMesh.Vertices[i].Y); packedVertexDataList.Add(assimpMesh.Vertices[i].Z);
+                        if (hasNormals) { packedVertexDataList.Add(assimpMesh.Normals[i].X); packedVertexDataList.Add(assimpMesh.Normals[i].Y); packedVertexDataList.Add(assimpMesh.Normals[i].Z); } else { packedVertexDataList.Add(0.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(0.0f); }
+                        if (hasVertexColors) { Assimp.Color4D color = assimpMesh.VertexColorChannels[0][i]; packedVertexDataList.Add(color.R); packedVertexDataList.Add(color.G); packedVertexDataList.Add(color.B); packedVertexDataList.Add(color.A); } else { packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); packedVertexDataList.Add(1.0f); }
+                        if (hasTexCoords) { AssimpNETVector3D tc = assimpMesh.TextureCoordinateChannels[0][i]; packedVertexDataList.Add(tc.X); packedVertexDataList.Add(tc.Y); } else { packedVertexDataList.Add(0.0f); packedVertexDataList.Add(0.0f); }
+                    }
+                    List<uint> indexList = new List<uint>();
+                    foreach (Assimp.Face f in assimpMesh.Faces) { if (f.IndexCount == 3) { indexList.Add((uint)f.Indices[0]); indexList.Add((uint)f.Indices[1]); indexList.Add((uint)f.Indices[2]); } }
 
-                if (packedVertexDataList.Count > 0 && indexList.Count > 0)
-                {
-                    MiloMesh newMiloMesh = new MiloMesh(gl, packedVertexDataList.ToArray(), indexList.ToArray(), miloMaterial);
-                    newMiloScene.AddModel(newMiloMesh);
-                    ModelDatabase.AddModel(newMiloMesh, assimpMeshName);
+                    if (packedVertexDataList.Count > 0 && indexList.Count > 0)
+                    {
+                        MiloMesh newMiloMesh = new MiloMesh(gl, packedVertexDataList.ToArray(), indexList.ToArray(), miloMaterial);
+                        newMiloScene.AddModel(newMiloMesh);
+                        ModelDatabase.AddModel(newMiloMesh, assimpMeshName);
+                    }
+                    else { Debug.LogWarning($"GLBImporter: Mesh '{assimpMeshName}' had no vertex or index data after processing. Skipped."); }
                 }
             }
+            else { Debug.Log("GLBImporter: No meshes found in the scene."); }
 
             if (assimpSceneData.HasCameras && assimpSceneData.CameraCount > 0)
             {
+                Debug.Log($"GLBImporter: Processing {assimpSceneData.CameraCount} cameras.");
                 for (int camIdx = 0; camIdx < assimpSceneData.CameraCount; camIdx++)
                 {
                     AssimpNETCamera currentAssimpCamera = assimpSceneData.Cameras[camIdx];
-                    Debug.Log($"GLBImporter: Found Assimp camera '{currentAssimpCamera.Name}' (Index: {camIdx}).");
-
-                    Node cameraNode = FindNodeForCameraByGlTFExtension(assimpSceneData.RootNode, camIdx);
-                    if (cameraNode == null)
-                    {
-                        cameraNode = FindNodeForCameraByName(assimpSceneData.RootNode, currentAssimpCamera.Name);
-                    }
+                    Node cameraNode = FindNodeForCameraByGlTFExtension(assimpSceneData.RootNode, camIdx) ?? FindNodeByName(assimpSceneData.RootNode, currentAssimpCamera.Name);
 
                     if (cameraNode != null)
                     {
-                        Debug.Log($"GLBImporter: Camera '{currentAssimpCamera.Name}' is associated with node '{cameraNode.Name}'.");
                         Silk.NET.Maths.Matrix4X4<float> worldTransformMatrixSilk = CalculateWorldTransform(cameraNode);
+                        MiloEngineCamera miloCam = new MiloEngineCamera
+                        {
+                            FieldOfViewDegrees = Scalar.RadiansToDegrees(currentAssimpCamera.FieldOfview),
+                            NearClipPlane = currentAssimpCamera.ClipPlaneNear,
+                            FarClipPlane = currentAssimpCamera.ClipPlaneFar,
+                            AspectRatio = currentAssimpCamera.AspectRatio > 0 ? currentAssimpCamera.AspectRatio : (320f / 240f)
+                        };
 
-                        MiloEngineCamera miloCam = new MiloEngineCamera();
+                        System.Numerics.Matrix4x4 cameraNodeWorldTransformSystem = worldTransformMatrixSilk.ToSystem();
+                        miloCam.Transform.LocalPosition = new Silk.NET.Maths.Vector3D<float>(cameraNodeWorldTransformSystem.Translation.X, cameraNodeWorldTransformSystem.Translation.Y, cameraNodeWorldTransformSystem.Translation.Z);
+                        miloCam.Transform.LocalRotation = Silk.NET.Maths.Quaternion<float>.CreateFromRotationMatrix(worldTransformMatrixSilk);
 
-                        miloCam.FieldOfViewDegrees = Scalar.RadiansToDegrees(currentAssimpCamera.FieldOfview); // Corrected: FieldOfview
-                        miloCam.NearClipPlane = currentAssimpCamera.ClipPlaneNear;
-                        miloCam.FarClipPlane = currentAssimpCamera.ClipPlaneFar;
-                        miloCam.AspectRatio = currentAssimpCamera.AspectRatio;
+                        Debug.Log($"GLBImporter: Created MiloCamera '{currentAssimpCamera.Name}' from node '{cameraNode.Name}'. Pos: {miloCam.Transform.LocalPosition}");
+                        newMiloScene.AddCamera(miloCam, currentAssimpCamera.Name);
 
-                        System.Numerics.Matrix4x4 worldTransformSystem = worldTransformMatrixSilk.ToSystem();
-                        System.Numerics.Vector3 positionSystem = worldTransformSystem.Translation;
-                        Silk.NET.Maths.Vector3D<float> positionSilk = new Silk.NET.Maths.Vector3D<float>(positionSystem.X, positionSystem.Y, positionSystem.Z);
-                        Silk.NET.Maths.Quaternion<float> rotationSilk = Silk.NET.Maths.Quaternion<float>.CreateFromRotationMatrix(worldTransformMatrixSilk);
-
-                        miloCam.Transform.LocalPosition = positionSilk;
-                        miloCam.Transform.LocalRotation = rotationSilk;
-
-                        Debug.Log($"GLBImporter: Created MiloCamera '{currentAssimpCamera.Name}' from GLB. Pos: {positionSilk}, Rot Quat: {rotationSilk}");
-
-                        if (newMiloScene.ActiveCamera == null || camIdx == 0 || newMiloScene.ActiveCamera.Transform.LocalPosition == new Silk.NET.Maths.Vector3D<float>(0, 1, 5)) // Prioritize GLB camera over scene's default
+                        if (newMiloScene.ActiveCamera == null || (newMiloScene.ActiveCamera.Transform.LocalPosition == new Silk.NET.Maths.Vector3D<float>(0, 1, 5) && newMiloScene.ActiveCamera.FieldOfViewDegrees == 60f))
                         {
                             newMiloScene.ActiveCamera = miloCam;
                             Debug.Log($"GLBImporter: Set '{currentAssimpCamera.Name}' as ActiveCamera for scene '{newMiloScene.Name}'.");
@@ -188,19 +216,113 @@ namespace Imports
                     else { Debug.LogWarning($"GLBImporter: Could not find a node for Assimp camera '{currentAssimpCamera.Name}'. Skipping."); }
                 }
             }
+            else { Debug.Log("GLBImporter: No cameras found in Assimp scene data."); }
+
+            if (assimpSceneData.HasLights && assimpSceneData.LightCount > 0)
+            {
+                Debug.Log($"GLBImporter: Processing {assimpSceneData.LightCount} lights.");
+                for (int lightIdx = 0; lightIdx < assimpSceneData.LightCount; lightIdx++)
+                {
+                    AssimpNETLight assimpLight = assimpSceneData.Lights[lightIdx];
+                    Debug.Log($"GLBImporter: Found Assimp light '{assimpLight.Name}' (Type: {assimpLight.LightType}).");
+                    Node lightNode = FindNodeByName(assimpSceneData.RootNode, assimpLight.Name);
+                    if (lightNode == null)
+                    {
+                        Debug.LogWarning($"GLBImporter: Could not find a transform node for light '{assimpLight.Name}'. Skipping this light.");
+                        continue;
+                    }
+
+                    Silk.NET.Maths.Matrix4X4<float> lightWorldTransformSilk = CalculateWorldTransform(lightNode);
+                    MiloLight newMiloLight = null;
+
+                    if (assimpLight.LightType == LightSourceType.Directional)
+                    {
+                        MiloDirectionalLight miloDirLight = new MiloDirectionalLight();
+                        // Clamp color components to 0-1 range for safety before assigning
+                        miloDirLight.Color = new System.Numerics.Vector4(
+                            (float)Math.Min(assimpLight.ColorDiffuse.R, 1.0f),
+                            (float)Math.Min(assimpLight.ColorDiffuse.G, 1.0f),
+                            (float)Math.Min(assimpLight.ColorDiffuse.B, 1.0f),
+                            1.0f);
+                        miloDirLight.Intensity = 1.0f; // Force intensity for testing
+                        newMiloLight = miloDirLight;
+                        Debug.Log($"GLBImporter: Created MiloDirectionalLight '{assimpLight.Name}'. Forced Color: {miloDirLight.Color}, Forced Intensity: {miloDirLight.Intensity}");
+                    }
+                    else if (assimpLight.LightType == LightSourceType.Spot)
+                    {
+                        MiloSpotLight miloSpotLight = new MiloSpotLight();
+                        miloSpotLight.Color = new System.Numerics.Vector4(
+                            (float)Math.Min(assimpLight.ColorDiffuse.R, 1.0f),
+                            (float)Math.Min(assimpLight.ColorDiffuse.G, 1.0f),
+                            (float)Math.Min(assimpLight.ColorDiffuse.B, 1.0f),
+                            1.0f);
+                        miloSpotLight.Intensity = 1.0f; // Force intensity for testing
+
+                        miloSpotLight.SetCutOffAngles(
+                            Scalar.RadiansToDegrees(assimpLight.AngleInnerCone),
+                            Scalar.RadiansToDegrees(assimpLight.AngleOuterCone)
+                        );
+
+                        float spotRange = 20.0f;
+                        Metadata.Entry rangeMetaEntry;
+                        if (lightNode.Metadata != null && lightNode.Metadata.TryGetValue("range", out rangeMetaEntry))
+                        {
+                            try
+                            {
+                                if (rangeMetaEntry.Data is float fVal) spotRange = fVal;
+                                else if (rangeMetaEntry.Data is double dVal) spotRange = (float)dVal;
+                                else if (rangeMetaEntry.Data is int iVal) spotRange = (float)iVal;
+                                else if (rangeMetaEntry.Data is long lVal) spotRange = (float)lVal;
+                                else if (rangeMetaEntry.Data is string sVal && float.TryParse(sVal, NumberStyles.Any, CultureInfo.InvariantCulture, out float pVal)) spotRange = pVal;
+                                else Debug.LogWarning($"GLBImporter: Light '{assimpLight.Name}' 'range' metadata type '{rangeMetaEntry.DataType}' / actual type '{rangeMetaEntry.Data?.GetType()}' not directly handled as float. Using default.");
+
+                                Debug.Log($"GLBImporter: Light '{assimpLight.Name}' attempt to read 'range' metadata resulted in: {spotRange}");
+                            }
+                            catch (Exception ex)
+                            {
+                                Debug.LogWarning($"GLBImporter: Could not convert 'range' metadata for light '{assimpLight.Name}'. Error: {ex.Message}. Using default.");
+                                spotRange = 20.0f; // Fallback to default if conversion fails
+                            }
+                        }
+                        else
+                        {
+                            Debug.LogWarning($"GLBImporter: Light '{assimpLight.Name}' no 'range' metadata found. Using default range: {spotRange}.");
+                        }
+
+                        if (spotRange <= 0 || float.IsNaN(spotRange) || float.IsInfinity(spotRange))
+                        {
+                            Debug.LogWarning($"GLBImporter: Light '{assimpLight.Name}' had invalid range value ({spotRange}). Resetting to default 20.0f.");
+                            spotRange = 20.0f;
+                        }
+                        miloSpotLight.Range = spotRange; // This is the line that was around 270
+
+                        newMiloLight = miloSpotLight;
+                        Debug.Log($"GLBImporter: Created MiloSpotLight '{assimpLight.Name}'. Forced Color: {miloSpotLight.Color}, Forced Intensity: {miloSpotLight.Intensity}, Range: {miloSpotLight.Range}, InnerDeg: {Scalar.RadiansToDegrees(assimpLight.AngleInnerCone)}, OuterDeg: {Scalar.RadiansToDegrees(assimpLight.AngleOuterCone)}");
+                    }
+
+                    if (newMiloLight != null)
+                    {
+                        System.Numerics.Matrix4x4 lightNodeWorldTransformSystem = lightWorldTransformSilk.ToSystem();
+                        newMiloLight.Transform.LocalPosition = new Silk.NET.Maths.Vector3D<float>(
+                            lightNodeWorldTransformSystem.Translation.X,
+                            lightNodeWorldTransformSystem.Translation.Y,
+                            lightNodeWorldTransformSystem.Translation.Z
+                        );
+                        newMiloLight.Transform.LocalRotation = Silk.NET.Maths.Quaternion<float>.CreateFromRotationMatrix(lightWorldTransformSilk);
+                        newMiloScene.AddLight(newMiloLight);
+                        Debug.Log($"GLBImporter: Added light '{assimpLight.Name}' to scene. Transform Pos: {newMiloLight.Transform.LocalPosition}");
+                    }
+                }
+            }
+            else { Debug.Log("GLBImporter: No lights found in Assimp scene data."); }
 
             if (newMiloScene.ActiveCamera == null)
-            { // This case should be rare if scene constructor default works
-                Debug.LogWarning($"GLBImporter: No cameras processed from GLB and scene has no default. Scene '{newMiloScene.Name}' will have a null ActiveCamera.");
-            }
-            else if (newMiloScene.ActiveCamera.Transform.LocalPosition == new Silk.NET.Maths.Vector3D<float>(0, 1, 5) && !(assimpSceneData.HasCameras && assimpSceneData.CameraCount > 0))
             {
-                Debug.Log($"GLBImporter: No cameras found in GLB. Scene '{newMiloScene.Name}' is using its own default camera.");
+                Debug.LogWarning($"GLBImporter: Scene '{newMiloScene.Name}' will use its default constructor camera as no camera was loaded from GLB or none was suitable to override the default.");
             }
-
 
             importer.Dispose();
-            Debug.Log($"GLBImporter: Finished GLB. Scene '{newMiloScene.Name}' Models: {newMiloScene.Models.Count}, ActiveCam: {(newMiloScene.ActiveCamera != null ? newMiloScene.ActiveCamera.Transform.GetHashCode().ToString() : "None")}.");
+            Debug.Log($"GLBImporter: Finished GLB. Scene '{newMiloScene.Name}' - Models: {newMiloScene.Models.Count}, Cameras: {newMiloScene.Cameras.Count}, Lights: {newMiloScene.Lights.Count}. ActiveCam Set: {newMiloScene.ActiveCamera != null}.");
             return newMiloScene;
         }
 
@@ -212,23 +334,13 @@ namespace Imports
                 string indexString = textureSlot.FilePath.Substring(1);
                 if (int.TryParse(indexString, out int embeddedTextureIndex))
                 {
-                    if (assimpSceneData.Textures == null) { Debug.LogError("..."); return null; }
-                    if (embeddedTextureIndex < 0 || embeddedTextureIndex >= assimpSceneData.TextureCount) { Debug.LogWarning("..."); return null; }
-                    Assimp.EmbeddedTexture embeddedTex = assimpSceneData.Textures[embeddedTextureIndex];
-                    if (embeddedTex == null) { Debug.LogError("..."); return null; }
-
-                    string dbgFilename = "N/A"; bool dbgIsCompressed = false; bool propertyAccessError = false;
-                    byte[] pixelData = null; int texWidth = 0; int texHeight = 0;
-                    try
+                    if (assimpSceneData.HasTextures && embeddedTextureIndex >= 0 && embeddedTextureIndex < assimpSceneData.TextureCount)
                     {
-                        dbgFilename = embeddedTex.Filename ?? "null_filename_val";
-                        dbgIsCompressed = embeddedTex.IsCompressed;
-                    }
-                    catch (Exception ex) { Debug.LogError($"GLBImporter.ProcessTexSlot: Initial Property access error for *{embeddedTextureIndex} ('{dbgFilename}'): {ex.Message}"); propertyAccessError = true; }
+                        Assimp.EmbeddedTexture embeddedTex = assimpSceneData.Textures[embeddedTextureIndex];
+                        byte[] pixelData = null; int texWidth = 0; int texHeight = 0;
+                        string dbgFilename = embeddedTex.Filename ?? $"embedded_{embeddedTextureIndex}";
 
-                    if (!propertyAccessError)
-                    {
-                        if (dbgIsCompressed)
+                        if (embeddedTex.IsCompressed)
                         {
                             if (embeddedTex.CompressedData != null && embeddedTex.CompressedData.Length > 0)
                             {
@@ -239,33 +351,41 @@ namespace Imports
                                 }
                                 catch (Exception e) { Debug.LogError($"GLBImporter.ProcessTexSlot: Decode compressed failed for '{dbgFilename}': {e.Message}"); }
                             }
-                            else { Debug.LogError($"GLBImporter.ProcessTexSlot: '{dbgFilename}' compressed but no data."); }
+                            else { Debug.LogWarning($"GLBImporter: Embedded texture '{dbgFilename}' is compressed but has no data."); }
                         }
                         else if (embeddedTex.NonCompressedData != null && embeddedTex.NonCompressedData.Length > 0 && embeddedTex.Width > 0 && embeddedTex.Height > 0)
                         {
                             texWidth = embeddedTex.Width; texHeight = embeddedTex.Height;
                             pixelData = new byte[texWidth * texHeight * 4];
-                            for (int i = 0; i < embeddedTex.NonCompressedData.Length; i++)
+                            for (int i = 0; i < texWidth * texHeight; i++)
                             {
-                                Texel t = embeddedTex.NonCompressedData[i];
-                                pixelData[i * 4 + 0] = t.R; pixelData[i * 4 + 1] = t.G; pixelData[i * 4 + 2] = t.B; pixelData[i * 4 + 3] = t.A;
+                                Texel texel = embeddedTex.NonCompressedData[i];
+                                pixelData[i * 4 + 0] = texel.R;
+                                pixelData[i * 4 + 1] = texel.G;
+                                pixelData[i * 4 + 2] = texel.B;
+                                pixelData[i * 4 + 3] = texel.A;
                             }
                         }
-                        else { Debug.LogWarning($"GLBImporter.ProcessTexSlot: '{dbgFilename}' no usable pixel data."); }
-                    }
+                        else { Debug.LogWarning($"GLBImporter: Embedded texture '{dbgFilename}' no usable non-compressed pixel data."); }
 
-                    if (pixelData != null && texWidth > 0 && texHeight > 0)
-                    {
-                        loadedTexture = new MiloTexture2D(gl, $"EmbeddedTexture_*{embeddedTextureIndex}_{dbgFilename}");
-                        loadedTexture.SetPixelData(texWidth, texHeight, pixelData);
-                        loadedTexture.UploadToGPU();
+                        if (pixelData != null && texWidth > 0 && texHeight > 0)
+                        {
+                            loadedTexture = new MiloTexture2D(gl, $"Embedded_{Path.GetFileNameWithoutExtension(dbgFilename)}_{embeddedTextureIndex}");
+                            loadedTexture.SetPixelData(texWidth, texHeight, pixelData);
+                            loadedTexture.UploadToGPU();
+                        }
                     }
+                    else { Debug.LogWarning($"GLBImporter: Embedded texture index {embeddedTextureIndex} out of range or no textures in scene."); }
                 }
                 else { Debug.LogWarning($"GLBImporter.ProcessTexSlot: Could not parse embedded texture index from '{textureSlot.FilePath}'."); }
             }
             else if (!string.IsNullOrEmpty(textureSlot.FilePath))
             {
-                string potentialExternalPath = Path.Combine(Path.GetDirectoryName(glbFilePath), textureSlot.FilePath);
+                string currentDirectory = Path.GetDirectoryName(glbFilePath);
+                string textureFilename = Path.GetFileName(textureSlot.FilePath);
+                string potentialExternalPath = Path.Combine(currentDirectory, textureFilename);
+                potentialExternalPath = Path.GetFullPath(potentialExternalPath);
+
                 if (File.Exists(potentialExternalPath))
                 {
                     try
@@ -280,61 +400,62 @@ namespace Imports
                     }
                     catch (Exception ex) { Debug.LogError($"GLBImporter.ProcessTexSlot: Failed to load external texture '{potentialExternalPath}'. Ex: {ex.Message}"); }
                 }
-                else { Debug.LogWarning($"GLBImporter.ProcessTexSlot: External texture file not found: '{potentialExternalPath}'."); }
+                else { Debug.LogWarning($"GLBImporter.ProcessTexSlot: External texture file not found: '{potentialExternalPath}'. Original in GLB: '{textureSlot.FilePath}'"); }
             }
             return loadedTexture;
+        }
+
+        private static Node FindNodeByName(Node currentNode, string nameToFind)
+        {
+            if (currentNode == null || string.IsNullOrEmpty(nameToFind)) return null;
+            if (currentNode.Name == nameToFind) return currentNode;
+            foreach (Node childNode in currentNode.Children)
+            {
+                Node found = FindNodeByName(childNode, nameToFind);
+                if (found != null) return found;
+            }
+            return null;
         }
 
         private static Node FindNodeForCameraByGlTFExtension(Node currentNode, int cameraIndexToFind)
         {
             if (currentNode == null) return null;
 
-            if (currentNode.Metadata != null && currentNode.Metadata.Count > 0)
+            Metadata.Entry camMetaEntry;
+            if (currentNode.Metadata != null && currentNode.Metadata.TryGetValue("camera", out camMetaEntry))
             {
-                if (currentNode.Metadata.TryGetValue("camera", out Metadata.Entry entry))
+                try
                 {
-                    // Corrected: Use MetaDataType.Int32 or MetaDataType.UnsignedInt for integer indices
-                    if (entry.DataType == MetaDataType.Int32)
+                    long indexValue = -1;
+                    object data = camMetaEntry.Data;
+
+                    if (data is int iVal) indexValue = iVal;
+                    else if (data is uint uiVal) indexValue = uiVal;
+                    else if (data is long lVal) indexValue = lVal;
+                    else if (data is ulong ulVal)
                     {
-                        if (entry.DataAs<int>() == cameraIndexToFind)
-                        {
-                            Debug.Log($"FindNodeForCameraByGlTFExtension: Found node '{currentNode.Name}' with metadata 'camera' (Int32) pointing to index {cameraIndexToFind}.");
-                            return currentNode;
-                        }
+                        if (ulVal <= int.MaxValue) indexValue = (long)ulVal;
                     }
-                    else if (entry.DataType == MetaDataType.UInt64) // glTF indices are often unsigned
+                    else if (data is short shVal) indexValue = shVal;
+                    else if (data is ushort ushVal) indexValue = ushVal;
+                    else if (data is byte bVal) indexValue = bVal;
+                    else if (data is sbyte sbVal) indexValue = sbVal;
+                    else if (data is string sVal && long.TryParse(sVal, NumberStyles.Any, CultureInfo.InvariantCulture, out long pVal)) indexValue = pVal;
+
+                    if (indexValue != -1 && indexValue == cameraIndexToFind)
                     {
-                        if (entry.DataAs<uint>() == cameraIndexToFind) // Assumes cameraIndexToFind can be compared to uint
-                        {
-                            Debug.Log($"FindNodeForCameraByGlTFExtension: Found node '{currentNode.Name}' with metadata 'camera' (Uint32) pointing to index {cameraIndexToFind}.");
-                            return currentNode;
-                        }
+                        return currentNode;
                     }
-                    // Add other integer types if necessary, e.g., Int64, Uint64, though less common for indices.
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"GLBImporter: Could not convert 'camera' metadata value '{camMetaEntry.Data}' of type '{camMetaEntry.DataType}' to integer. Error: {ex.Message}");
                 }
             }
 
             foreach (Node childNode in currentNode.Children)
             {
                 Node found = FindNodeForCameraByGlTFExtension(childNode, cameraIndexToFind);
-                if (found != null) return found;
-            }
-            return null;
-        }
-
-        private static Node FindNodeForCameraByName(Node currentNode, string cameraNameToFind)
-        {
-            if (currentNode == null || string.IsNullOrEmpty(cameraNameToFind)) return null;
-
-            if (currentNode.Name == cameraNameToFind)
-            {
-                Debug.Log($"GLBImporter.FindNodeForCameraByName: Found node '{currentNode.Name}' matching camera name '{cameraNameToFind}'.");
-                return currentNode;
-            }
-
-            foreach (Node childNode in currentNode.Children)
-            {
-                Node found = FindNodeForCameraByName(childNode, cameraNameToFind);
                 if (found != null) return found;
             }
             return null;

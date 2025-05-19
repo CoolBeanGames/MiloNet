@@ -5,7 +5,8 @@ using Silk.NET.Maths;
 using Silk.NET.OpenGL;
 using Debugger;
 using MiloRender;
-using MiloRender.DataTypes; // For Camera (fallback)
+using MiloRender.DataTypes; // For Camera (fallback), Scene, Light
+using System.Linq;          // For .Any()
 
 namespace MiloNet
 {
@@ -15,7 +16,7 @@ namespace MiloNet
         private static GL _gl;
         private static Render _render;
         private static Camera _fallbackCamera;
-        private static Scene _mainGameScene; // Program.cs can hold a reference if needed, or get it from Game
+        private static Scene _mainGameScene; // Program.cs holds the reference to the scene returned by Game.Init
 
         static void Main(string[] args)
         {
@@ -65,7 +66,7 @@ namespace MiloNet
 
             try
             {
-                _render = new Render(_gl, _fallbackCamera); // Initialize renderer with the fallback
+                _render = new Render(_gl, _fallbackCamera);
                 Debug.Log("MiloNet: Renderer initialized with fallback camera.");
             }
             catch (Exception ex)
@@ -76,29 +77,50 @@ namespace MiloNet
 
             _gl.Viewport(0, 0, (uint)_window.FramebufferSize.X, (uint)_window.FramebufferSize.Y);
 
-            // Initialize the Game module. Game.Init now returns the loaded scene.
             Scene gameSceneFromInit = null;
             try
             {
-                gameSceneFromInit = Game.Init(_gl); // Game.Init only needs GL for GLBImporter
-                _mainGameScene = gameSceneFromInit; // Program can keep a reference if needed
+                gameSceneFromInit = Game.Init(_gl);
+                _mainGameScene = gameSceneFromInit; // Store the returned scene
             }
             catch (Exception ex)
             {
                 Debug.LogError($"MiloNet: Exception during Game.Init(): {ex.Message} - {ex.StackTrace}");
             }
 
-            // Program.cs decides which camera the renderer uses based on Game.Init's result.
-            if (gameSceneFromInit != null && gameSceneFromInit.ActiveCamera != null)
+            if (_mainGameScene != null) // Check if Game.Init succeeded in loading a scene
             {
-                _render.SetCamera(gameSceneFromInit.ActiveCamera);
-                Debug.Log("MiloNet.OnLoad: Renderer camera set to game scene's active camera.");
+                // Set Renderer Camera
+                if (_mainGameScene.ActiveCamera != null)
+                {
+                    _render.SetCamera(_mainGameScene.ActiveCamera);
+                    Debug.Log("MiloNet.OnLoad: Renderer camera set to game scene's active camera.");
+                }
+                else
+                {
+                    _render.SetCamera(_fallbackCamera); // Ensure fallback if scene has no camera
+                    Debug.LogWarning("MiloNet.OnLoad: Game scene has no active camera. Renderer set to fallback camera.");
+                }
+
+                // --- ACTIVATE THE FIRST LIGHT IN THE SCENE ---
+                if (_mainGameScene.Lights != null && _mainGameScene.Lights.Any())
+                {
+                    _mainGameScene.ActiveLight = _mainGameScene.Lights[0]; // Activate the first light found
+                    var activeLightInfo = _mainGameScene.ActiveLight;
+                    Debug.Log($"Program.OnLoad: Activated first light in scene '{_mainGameScene.Name}'. Type: {activeLightInfo.GetType().Name}, Color: {activeLightInfo.Color}, Intensity: {activeLightInfo.Intensity}, Pos: {activeLightInfo.Transform.LocalPosition}");
+                }
+                else
+                {
+                    Debug.LogWarning($"Program.OnLoad: Game scene '{_mainGameScene.Name}' loaded but has no lights. Lighting will be based on 'NoLight' shader path.");
+                    _mainGameScene.ActiveLight = null; // Explicitly set to null
+                }
+                // --- END LIGHT ACTIVATION ---
             }
             else
             {
-                // If gameScene is null or has no camera, renderer continues using _fallbackCamera.
-                Debug.LogWarning("MiloNet.OnLoad: Game scene is null or has no camera. Renderer continues with fallback camera.");
-                // _render.SetCamera(_fallbackCamera); // Already set during _render init, but can be explicit
+                // Game.Init failed to return a scene, ensure renderer uses fallback.
+                _render.SetCamera(_fallbackCamera);
+                Debug.LogWarning("MiloNet.OnLoad: Game.Init did not return a scene. Renderer continues with fallback camera. No game lights to activate.");
             }
 
             Debug.Log("MiloNet: OnLoad complete.");
@@ -113,28 +135,29 @@ namespace MiloNet
         {
             if (_render == null || _gl == null) return;
 
-            // Ensure a camera is active on the renderer.
-            // This handles edge cases where Game.Init might have failed or scene camera became null.
-            if (_render.GetCurrentCamera() == null)
+            // Camera management during render frame:
+            // Ensure the renderer has a valid camera. This might be the scene's or the fallback.
+            if (_mainGameScene != null)
+            {
+                if (_mainGameScene.ActiveCamera != null && _render.GetCurrentCamera() != _mainGameScene.ActiveCamera)
+                {
+                    _render.SetCamera(_mainGameScene.ActiveCamera);
+                }
+                else if (_mainGameScene.ActiveCamera == null && _render.GetCurrentCamera() != _fallbackCamera)
+                {
+                    // Scene exists but its camera is null, use fallback.
+                    _render.SetCamera(_fallbackCamera);
+                }
+            }
+            else if (_render.GetCurrentCamera() == null) // No game scene, and renderer has no camera
             {
                 _render.SetCamera(_fallbackCamera);
-                Debug.LogWarning("Program.OnRenderFrame: Renderer camera was null, set to fallback.");
             }
-            // If _mainGameScene exists, and its camera configuration changed, update renderer camera
-            else if (_mainGameScene != null && _mainGameScene.ActiveCamera != null && _render.GetCurrentCamera() != _mainGameScene.ActiveCamera)
-            {
-                _render.SetCamera(_mainGameScene.ActiveCamera);
-                Debug.Log("Program.OnRenderFrame: Updated renderer camera to game scene's active camera.");
-            }
-            else if (_mainGameScene != null && _mainGameScene.ActiveCamera == null && _render.GetCurrentCamera() != _fallbackCamera)
-            {
-                _render.SetCamera(_fallbackCamera); // Scene exists but lost its camera, use fallback
-                Debug.LogWarning("Program.OnRenderFrame: Game scene has no active camera, renderer set to fallback.");
-            }
-
+            // If _render.GetCurrentCamera() is already set correctly (either to a scene camera or fallback by Init),
+            // these checks might be redundant but are safe.
 
             _render.BeginDraw();
-            Game.RenderFrame();
+            Game.RenderFrame(); // Game.RenderFrame simply calls _gameScene.Draw()
             _render.EndDraw();
         }
 
